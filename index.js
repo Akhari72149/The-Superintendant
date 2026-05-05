@@ -1,10 +1,20 @@
 require("dotenv").config();
 
-const { Client, GatewayIntentBits } = require("discord.js");
+const {
+  Client,
+  GatewayIntentBits,
+  SlashCommandBuilder,
+  REST,
+  Routes,
+  EmbedBuilder,
+} = require("discord.js");
+
 const { exec } = require("child_process");
 
-const serverStatusBatch =
-  `"C:\\discord-bot\\commands\\Check Server Status.bat"`;
+const serverStatusBatch = `"C:\\discord-bot\\commands\\Check Server Status.bat"`;
+
+const clientId = process.env.CLIENT_ID;
+const guildId = process.env.GUILD_ID;
 
 const factionRoles = {
   "212th": "212th Attack Battalion",
@@ -27,8 +37,192 @@ const client = new Client({
   ],
 });
 
-client.once("clientReady", () => {
+const commands = [
+  new SlashCommandBuilder()
+    .setName("request-tags")
+    .setDescription("Request your GARC faction tags")
+    .addStringOption((option) =>
+      option
+        .setName("faction")
+        .setDescription("Select your faction")
+        .setRequired(true)
+        .addChoices(
+          { name: "212th Attack Battalion", value: "212th" },
+          { name: "501st Legion", value: "501st" },
+          { name: "91st Recon Company", value: "91st" },
+          { name: "327th Star Corps", value: "327th" },
+          { name: "38th Assault Corps", value: "38th" }
+        )
+    )
+    .addStringOption((option) =>
+      option
+        .setName("name")
+        .setDescription("Your requested Discord/unit name")
+        .setRequired(true)
+    ),
+].map((command) => command.toJSON());
+
+client.once("ready", async () => {
   console.log(`Logged in as ${client.user.tag}`);
+
+  if (!clientId || !guildId) {
+    console.error("Missing CLIENT_ID or GUILD_ID in .env");
+    return;
+  }
+
+  const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
+
+  try {
+    console.log("Registering slash commands...");
+
+    await rest.put(Routes.applicationGuildCommands(clientId, guildId), {
+      body: commands,
+    });
+
+    console.log("Slash commands registered.");
+  } catch (error) {
+    console.error("Failed to register slash commands:", error);
+  }
+});
+
+client.on("interactionCreate", async (interaction) => {
+  if (!interaction.isChatInputCommand()) return;
+  if (interaction.commandName !== "request-tags") return;
+
+  try {
+    if (!interaction.guild) {
+      await interaction.reply({
+        content: "❌ This command can only be used inside the server.",
+        ephemeral: true,
+      });
+      return;
+    }
+
+    const channelName = interaction.channel?.name?.toLowerCase();
+
+    if (channelName !== "requesting-tags") {
+      await interaction.reply({
+        content: "❌ Please use `/request-tags` in the `requesting-tags` channel.",
+        ephemeral: true,
+      });
+      return;
+    }
+
+    const faction = interaction.options.getString("faction", true);
+    const name = interaction.options.getString("name", true).trim();
+
+    if (!name) {
+      await interaction.reply({
+        content: "❌ Please enter a valid name.",
+        ephemeral: true,
+      });
+      return;
+    }
+
+    const factionRoleName = factionRoles[faction];
+
+    if (!factionRoleName) {
+      await interaction.reply({
+        content:
+          "❌ Invalid faction. If you are GARC, please read the pinned message. If not, please contact a 101st NCO.",
+        ephemeral: true,
+      });
+      return;
+    }
+
+    await interaction.guild.roles.fetch();
+
+    const factionRole = interaction.guild.roles.cache.find(
+      (role) => role.name === factionRoleName
+    );
+
+    const extraRole = interaction.guild.roles.cache.find(
+      (role) => role.name === extraRoleName
+    );
+
+    const roleToRemove = interaction.guild.roles.cache.get(roleToRemoveId);
+
+    if (!factionRole) {
+      await interaction.reply({
+        content: `❌ Requested faction role not found: **${factionRoleName}**`,
+        ephemeral: true,
+      });
+      return;
+    }
+
+    if (!extraRole) {
+      await interaction.reply({
+        content: `❌ Extra role not found: **${extraRoleName}**`,
+        ephemeral: true,
+      });
+      return;
+    }
+
+    const member = await interaction.guild.members.fetch(interaction.user.id);
+
+    await member.roles.add(factionRole);
+    await member.roles.add(extraRole);
+
+    if (roleToRemove && member.roles.cache.has(roleToRemove.id)) {
+      await member.roles.remove(roleToRemove);
+    }
+
+    let nicknameUpdated = true;
+
+    await member.setNickname(name).catch(() => {
+      nicknameUpdated = false;
+    });
+
+    const embed = new EmbedBuilder()
+      .setColor(0x00ff66)
+      .setTitle("✅ Tags Assigned")
+      .setDescription(`Tags have been assigned for **${name}**.`)
+      .addFields(
+        {
+          name: "Faction",
+          value: factionRoleName,
+          inline: true,
+        },
+        {
+          name: "Member Role",
+          value: extraRoleName,
+          inline: true,
+        },
+        {
+          name: "Nickname",
+          value: nicknameUpdated
+            ? `Updated to **${name}**`
+            : "Could not update automatically. Please update your nickname manually.",
+          inline: false,
+        }
+      )
+      .setFooter({
+        text: `Requested by ${interaction.user.tag}`,
+      })
+      .setTimestamp();
+
+    await interaction.reply({
+      embeds: [embed],
+    });
+
+    console.log(
+      `[TAG REQUEST] Assigned ${factionRoleName} and ${extraRoleName} to ${interaction.user.tag}`
+    );
+  } catch (error) {
+    console.error("Slash command error:", error);
+
+    if (interaction.replied || interaction.deferred) {
+      await interaction.followUp({
+        content: "❌ Something went wrong while assigning your tags.",
+        ephemeral: true,
+      });
+    } else {
+      await interaction.reply({
+        content: "❌ Something went wrong while assigning your tags.",
+        ephemeral: true,
+      });
+    }
+  }
 });
 
 client.on("messageCreate", async (msg) => {
@@ -40,7 +234,6 @@ client.on("messageCreate", async (msg) => {
     const command = content.toLowerCase();
     const channelName = msg.channel.name?.toLowerCase();
 
-    // Server status command
     if (command === "server status") {
       const allowedChannels = ["bot-channel", "server-control"];
 
@@ -68,7 +261,6 @@ client.on("messageCreate", async (msg) => {
       return;
     }
 
-    // LOA role handler
     if (channelName === "loa") {
       const loaRole = msg.guild.roles.cache.find((role) => role.name === "LOA");
 
@@ -98,100 +290,6 @@ client.on("messageCreate", async (msg) => {
       await msg.react("👍");
       return;
     }
-
-    // Requesting tags handler
-    if (channelName === "requesting-tags") {
-      console.log(`[TAG REQUEST] Message received from ${msg.author.tag}: ${content}`);
-
-      if (!command.startsWith("requesting:")) {
-        console.log("[TAG REQUEST] Ignored: message does not start with Requesting:");
-        return;
-      }
-
-      const lines = content
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter(Boolean);
-
-      const requestingLine = lines.find((line) =>
-        line.toLowerCase().startsWith("requesting:")
-      );
-
-      const nameLine = lines.find((line) =>
-        line.toLowerCase().startsWith("name:")
-      );
-
-      if (!requestingLine || !nameLine) {
-        await msg.channel.send(
-          "Invalid format. Please use:\n```Requesting: 501st\nName: Your Name```"
-        );
-        await msg.react("❌");
-        return;
-      }
-
-      const faction = requestingLine.replace(/^requesting:\s*/i, "").trim();
-      const name = nameLine.replace(/^name:\s*/i, "").trim();
-
-      if (!faction || !name) {
-        await msg.channel.send(
-          "Invalid format. Please use:\n```Requesting: 501st\nName: Your Name```"
-        );
-        await msg.react("❌");
-        return;
-      }
-
-      const factionRoleName = factionRoles[faction];
-
-      if (!factionRoleName) {
-        await msg.channel.send(
-          "Invalid faction, if you are GARC read pinned, if not please contact a 101st NCO."
-        );
-        await msg.react("❌");
-        return;
-      }
-
-      await msg.guild.roles.fetch();
-
-      const factionRole = msg.guild.roles.cache.find(
-        (role) => role.name === factionRoleName
-      );
-
-      const extraRole = msg.guild.roles.cache.find(
-        (role) => role.name === extraRoleName
-      );
-
-      const roleToRemove = msg.guild.roles.cache.get(roleToRemoveId);
-
-      if (!factionRole) {
-        await msg.channel.send(`Requested faction role not found: ${factionRoleName}`);
-        await msg.react("❌");
-        return;
-      }
-
-      if (!extraRole) {
-        await msg.channel.send(`Extra role not found: ${extraRoleName}`);
-        await msg.react("❌");
-        return;
-      }
-
-      const member = await msg.guild.members.fetch(msg.author.id);
-
-      await member.roles.add(factionRole);
-      await member.roles.add(extraRole);
-
-      if (roleToRemove && member.roles.cache.has(roleToRemove.id)) {
-        await member.roles.remove(roleToRemove);
-      }
-
-      await msg.react("👍");
-      await msg.channel.send(`Tags assigned for ${name}, have you updated your name?`);
-
-      console.log(
-        `[TAG REQUEST] Assigned ${factionRoleName} and ${extraRoleName} to ${msg.author.tag}`
-      );
-
-      return;
-    }
   } catch (error) {
     console.error("Message handler error:", error);
 
@@ -200,5 +298,8 @@ client.on("messageCreate", async (msg) => {
     } catch {}
   }
 });
+
+process.on("unhandledRejection", console.error);
+process.on("uncaughtException", console.error);
 
 client.login(process.env.TOKEN);
