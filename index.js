@@ -50,7 +50,6 @@ Before submitting an armour request, please make sure you follow the guidelines 
 **1. Use the correct sheet**
 Open the spreadsheet link below and find the correct section for 101st armour requests.
 
-
 **5. Wait for review**
 Once submitted, the mod team will review your request when available. Do not repeatedly ping staff unless asked for more information.
 
@@ -107,6 +106,30 @@ const mainGuildCommands = [
           { name: "Start LOA", value: "start" },
           { name: "End LOA", value: "end" }
         )
+    )
+    .addStringOption((option) =>
+      option
+        .setName("type")
+        .setDescription("Select the LOA type")
+        .setRequired(false)
+        .addChoices(
+          { name: "LOA", value: "LOA" },
+          { name: "SLOA", value: "SLOA" },
+          { name: "ELOA", value: "ELOA" },
+          { name: "ULOA", value: "ULOA" }
+        )
+    )
+    .addStringOption((option) =>
+      option
+        .setName("expected_end")
+        .setDescription("Expected LOA end date, e.g. 20/05/2026")
+        .setRequired(false)
+    )
+    .addStringOption((option) =>
+      option
+        .setName("reason")
+        .setDescription("Reason for LOA")
+        .setRequired(false)
     ),
 ].map((command) => command.toJSON());
 
@@ -315,6 +338,11 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       const action = interaction.options.getString("action", true);
+      const loaType = interaction.options.getString("type") || "LOA";
+      const expectedEnd =
+        interaction.options.getString("expected_end")?.trim() || "Not provided";
+      const reason =
+        interaction.options.getString("reason")?.trim() || "No reason provided.";
 
       await interaction.guild.roles.fetch();
 
@@ -335,23 +363,87 @@ client.on("interactionCreate", async (interaction) => {
       if (action === "end") {
         await member.roles.remove(loaRole);
 
+        const embed = new EmbedBuilder()
+          .setColor(0xff5555)
+          .setTitle("✅ LOA Ended")
+          .setDescription(`${interaction.user} has ended their Leave of Absence.`)
+          .addFields(
+            {
+              name: "Member",
+              value: `${interaction.user}`,
+              inline: true,
+            },
+            {
+              name: "LOA Type",
+              value: loaType,
+              inline: true,
+            },
+            {
+              name: "Expected End Date",
+              value: expectedEnd,
+              inline: true,
+            },
+            {
+              name: "Reason",
+              value: reason,
+              inline: false,
+            }
+          )
+          .setFooter({
+            text: `Requested by ${interaction.user.tag}`,
+          })
+          .setTimestamp();
+
         await interaction.reply({
-          content: "✅ Your LOA has been ended.",
-          ephemeral: true,
+          embeds: [embed],
         });
 
-        console.log(`[LOA] Removed LOA role from ${interaction.user.tag}`);
+        console.log(
+          `[LOA] Removed LOA role from ${interaction.user.tag} | Type: ${loaType} | Expected End: ${expectedEnd} | Reason: ${reason}`
+        );
         return;
       }
 
       await member.roles.add(loaRole);
 
+      const embed = new EmbedBuilder()
+        .setColor(0x00ff66)
+        .setTitle("✅ LOA Started")
+        .setDescription(`${interaction.user} is now marked as on Leave of Absence.`)
+        .addFields(
+          {
+            name: "Member",
+            value: `${interaction.user}`,
+            inline: true,
+          },
+          {
+            name: "LOA Type",
+            value: loaType,
+            inline: true,
+          },
+          {
+            name: "Expected End Date",
+            value: expectedEnd,
+            inline: true,
+          },
+          {
+            name: "Reason",
+            value: reason,
+            inline: false,
+          }
+        )
+        .setFooter({
+          text: `Requested by ${interaction.user.tag}`,
+        })
+        .setTimestamp();
+
       await interaction.reply({
-        content: "✅ You are now marked as on LOA.",
-        ephemeral: true,
+        embeds: [embed],
       });
 
-      console.log(`[LOA] Added LOA role to ${interaction.user.tag}`);
+      console.log(
+        `[LOA] Added LOA role to ${interaction.user.tag} | Type: ${loaType} | Expected End: ${expectedEnd} | Reason: ${reason}`
+      );
       return;
     }
 
