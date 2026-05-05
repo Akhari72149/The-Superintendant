@@ -40,6 +40,24 @@ const modteamRoles = {
 const modteamSheetLink =
   "https://docs.google.com/spreadsheets/d/14G6fJP3V32_1vyI1YkjszJMyne_d-Y2kV1f-A8JG3pw/edit?usp=sharing";
 
+const armourRequestMessage = `
+**101st Armour Request Submission Guidelines**
+
+You have selected the **101st** tag.
+
+Before submitting an armour request, please make sure you follow the guidelines below:
+
+**1. Use the correct sheet**
+Open the spreadsheet link below and find the correct section for 101st armour requests.
+
+
+**5. Wait for review**
+Once submitted, the mod team will review your request when available. Do not repeatedly ping staff unless asked for more information.
+
+**Armour Request Sheet:**
+${modteamSheetLink}
+`;
+
 const extraRoleName = "GARC Member";
 const roleToRemoveId = "492653693091577856";
 
@@ -367,11 +385,11 @@ client.on("interactionCreate", async (interaction) => {
 
       await interaction.guild.roles.fetch();
 
-      const role = interaction.guild.roles.cache.find(
+      const selectedRole = interaction.guild.roles.cache.find(
         (serverRole) => serverRole.name === roleName
       );
 
-      if (!role) {
+      if (!selectedRole) {
         await interaction.reply({
           content: `❌ Role not found: **${roleName}**`,
           ephemeral: true,
@@ -381,24 +399,42 @@ client.on("interactionCreate", async (interaction) => {
 
       const member = await interaction.guild.members.fetch(interaction.user.id);
 
-      await member.roles.add(role);
+      const modteamRoleNames = Object.values(modteamRoles);
+
+      const rolesToRemove = member.roles.cache.filter(
+        (memberRole) =>
+          modteamRoleNames.includes(memberRole.name) &&
+          memberRole.id !== selectedRole.id
+      );
+
+      if (rolesToRemove.size > 0) {
+        await member.roles.remove(rolesToRemove);
+      }
+
+      if (!member.roles.cache.has(selectedRole.id)) {
+        await member.roles.add(selectedRole);
+      }
 
       let dmSent = true;
 
       if (tag === "101st") {
-        await interaction.user
-          .send(
-            `Click the link to get the 101st role:\n${modteamSheetLink}`
-          )
-          .catch(() => {
-            dmSent = false;
-          });
+        await interaction.user.send(armourRequestMessage).catch(() => {
+          dmSent = false;
+        });
       }
 
       const embed = new EmbedBuilder()
         .setColor(0x00ff66)
-        .setTitle("✅ Tag Assigned")
+        .setTitle("✅ Tag Updated")
         .setDescription(`You have been assigned the **${roleName}** role.`)
+        .addFields({
+          name: "Previous Tags",
+          value:
+            rolesToRemove.size > 0
+              ? `Removed: ${rolesToRemove.map((role) => role.name).join(", ")}`
+              : "No previous Modteam tags found.",
+          inline: false,
+        })
         .setFooter({
           text: `Requested by ${interaction.user.tag}`,
         })
@@ -406,10 +442,10 @@ client.on("interactionCreate", async (interaction) => {
 
       if (tag === "101st") {
         embed.addFields({
-          name: "101st Link",
+          name: "Armour Request Guidelines",
           value: dmSent
-            ? "I have sent the spreadsheet link to your DMs."
-            : `I could not DM you. Please use this link:\n${modteamSheetLink}`,
+            ? "I have sent the armour request submission guidelines to your DMs."
+            : `I could not DM you. Please use the armour request sheet here:\n${modteamSheetLink}`,
           inline: false,
         });
       }
@@ -419,7 +455,14 @@ client.on("interactionCreate", async (interaction) => {
         ephemeral: true,
       });
 
-      console.log(`[MODTEAM TAG] Assigned ${roleName} to ${interaction.user.tag}`);
+      console.log(
+        `[MODTEAM TAG] Assigned ${roleName} to ${interaction.user.tag}. Removed: ${
+          rolesToRemove.size > 0
+            ? rolesToRemove.map((role) => role.name).join(", ")
+            : "None"
+        }`
+      );
+
       return;
     }
   } catch (error) {
