@@ -1,4 +1,5 @@
-require("dotenv").config();
+const path = require("path");
+require("dotenv").config({ path: path.join(__dirname, ".env") });
 
 const { Client, GatewayIntentBits } = require("discord.js");
 
@@ -25,10 +26,15 @@ client.once("ready", async () => {
       hour12: false,
     });
 
-    const message =
-      status === "success"
-        ? `✅ **Server backup completed**\nMode: **${mode}**\nTime: **${now}**`
-        : `❌ **Server backup failed**\nMode: **${mode}**\nTime: **${now}**`;
+    let message;
+
+    if (status === "success") {
+      message = `✅ **Server backup completed**\nMode: **${mode}**\nTime: **${now}**`;
+    } else if (status === "cancelled") {
+      message = `⚠️ **Server backup cancelled**\nMode: **${mode}**\nTime: **${now}**`;
+    } else {
+      message = `❌ **Server backup failed**\nMode: **${mode}**\nTime: **${now}**`;
+    }
 
     await channel.send(message);
     console.log("Backup notice sent.");
@@ -38,5 +44,10 @@ client.once("ready", async () => {
     process.exit(1);
   }
 });
+
+if (!process.env.TOKEN) {
+  console.error("Missing TOKEN in C:\\discord-bot\\.env");
+  process.exit(1);
+}
 
 client.login(process.env.TOKEN);
