@@ -15,6 +15,11 @@ const serverStatusBatch = `"C:\\discord-bot\\commands\\Check Server Status.bat"`
 
 const clientId = process.env.CLIENT_ID;
 const guildId = process.env.GUILD_ID;
+const modteamGuildId = process.env.MODTEAM_GUILD_ID;
+
+const requestTagsChannelId = "491197868560875530";
+const loaChannelId = "448367192040407052";
+const modteamTagChannelId = "635676190618681374";
 
 const factionRoles = {
   "212th": "212th Attack Battalion",
@@ -23,6 +28,17 @@ const factionRoles = {
   "327th": "327th Star Corps",
   "38th": "38th Assault Corps",
 };
+
+const modteamRoles = {
+  "101st": "101st",
+  "501st": "501st",
+  "91st": "91st",
+  "327th": "327th",
+  "38th": "38th",
+};
+
+const modteamSheetLink =
+  "https://docs.google.com/spreadsheets/d/14G6fJP3V32_1vyI1YkjszJMyne_d-Y2kV1f-A8JG3pw/edit?usp=sharing";
 
 const extraRoleName = "GARC Member";
 const roleToRemoveId = "492653693091577856";
@@ -37,7 +53,7 @@ const client = new Client({
   ],
 });
 
-const commands = [
+const mainGuildCommands = [
   new SlashCommandBuilder()
     .setName("request-tags")
     .setDescription("Request your GARC faction tags")
@@ -60,6 +76,39 @@ const commands = [
         .setDescription("Your requested Discord/unit name")
         .setRequired(true)
     ),
+
+  new SlashCommandBuilder()
+    .setName("loa")
+    .setDescription("Start or end Leave of Absence")
+    .addStringOption((option) =>
+      option
+        .setName("action")
+        .setDescription("Choose whether to start or end LOA")
+        .setRequired(true)
+        .addChoices(
+          { name: "Start LOA", value: "start" },
+          { name: "End LOA", value: "end" }
+        )
+    ),
+].map((command) => command.toJSON());
+
+const modteamCommands = [
+  new SlashCommandBuilder()
+    .setName("modteam-tag")
+    .setDescription("Request a Modteam server tag")
+    .addStringOption((option) =>
+      option
+        .setName("tag")
+        .setDescription("Select the tag you need")
+        .setRequired(true)
+        .addChoices(
+          { name: "101st", value: "101st" },
+          { name: "501st", value: "501st" },
+          { name: "91st", value: "91st" },
+          { name: "327th", value: "327th" },
+          { name: "38th", value: "38th" }
+        )
+    ),
 ].map((command) => command.toJSON());
 
 client.once("ready", async () => {
@@ -73,13 +122,25 @@ client.once("ready", async () => {
   const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 
   try {
-    console.log("Registering slash commands...");
+    console.log("Registering main guild slash commands...");
 
     await rest.put(Routes.applicationGuildCommands(clientId, guildId), {
-      body: commands,
+      body: mainGuildCommands,
     });
 
-    console.log("Slash commands registered.");
+    console.log("Main guild slash commands registered.");
+
+    if (modteamGuildId) {
+      console.log("Registering Modteam guild slash commands...");
+
+      await rest.put(Routes.applicationGuildCommands(clientId, modteamGuildId), {
+        body: modteamCommands,
+      });
+
+      console.log("Modteam guild slash commands registered.");
+    } else {
+      console.warn("MODTEAM_GUILD_ID missing in .env, skipping Modteam commands.");
+    }
   } catch (error) {
     console.error("Failed to register slash commands:", error);
   }
@@ -87,138 +148,291 @@ client.once("ready", async () => {
 
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
-  if (interaction.commandName !== "request-tags") return;
 
   try {
     if (!interaction.guild) {
       await interaction.reply({
-        content: "❌ This command can only be used inside the server.",
+        content: "❌ This command can only be used inside a server.",
         ephemeral: true,
       });
       return;
     }
 
-    const channelName = interaction.channel?.name?.toLowerCase();
+    if (interaction.commandName === "request-tags") {
+      if (interaction.guildId !== guildId) {
+        await interaction.reply({
+          content: "❌ This command can only be used in the main server.",
+          ephemeral: true,
+        });
+        return;
+      }
 
-    if (channelName !== "requesting-tags") {
+      if (interaction.channelId !== requestTagsChannelId) {
+        await interaction.reply({
+          content: `❌ Please use \`/request-tags\` in <#${requestTagsChannelId}>.`,
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const faction = interaction.options.getString("faction", true);
+      const name = interaction.options.getString("name", true).trim();
+
+      if (!name) {
+        await interaction.reply({
+          content: "❌ Please enter a valid name.",
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const factionRoleName = factionRoles[faction];
+
+      if (!factionRoleName) {
+        await interaction.reply({
+          content:
+            "❌ Invalid faction. If you are GARC, please read the pinned message. If not, please contact a 101st NCO.",
+          ephemeral: true,
+        });
+        return;
+      }
+
+      await interaction.guild.roles.fetch();
+
+      const factionRole = interaction.guild.roles.cache.find(
+        (role) => role.name === factionRoleName
+      );
+
+      const extraRole = interaction.guild.roles.cache.find(
+        (role) => role.name === extraRoleName
+      );
+
+      const roleToRemove = interaction.guild.roles.cache.get(roleToRemoveId);
+
+      if (!factionRole) {
+        await interaction.reply({
+          content: `❌ Requested faction role not found: **${factionRoleName}**`,
+          ephemeral: true,
+        });
+        return;
+      }
+
+      if (!extraRole) {
+        await interaction.reply({
+          content: `❌ Extra role not found: **${extraRoleName}**`,
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const member = await interaction.guild.members.fetch(interaction.user.id);
+
+      await member.roles.add(factionRole);
+      await member.roles.add(extraRole);
+
+      if (roleToRemove && member.roles.cache.has(roleToRemove.id)) {
+        await member.roles.remove(roleToRemove);
+      }
+
+      let nicknameUpdated = true;
+
+      await member.setNickname(name).catch(() => {
+        nicknameUpdated = false;
+      });
+
+      const embed = new EmbedBuilder()
+        .setColor(0x00ff66)
+        .setTitle("✅ Tags Assigned")
+        .setDescription(`Tags have been assigned for **${name}**.`)
+        .addFields(
+          {
+            name: "Faction",
+            value: factionRoleName,
+            inline: true,
+          },
+          {
+            name: "Member Role",
+            value: extraRoleName,
+            inline: true,
+          },
+          {
+            name: "Nickname",
+            value: nicknameUpdated
+              ? `Updated to **${name}**`
+              : "Could not update automatically. Please update your nickname manually.",
+            inline: false,
+          }
+        )
+        .setFooter({
+          text: `Requested by ${interaction.user.tag}`,
+        })
+        .setTimestamp();
+
       await interaction.reply({
-        content: "❌ Please use `/request-tags` in the `requesting-tags` channel.",
-        ephemeral: true,
+        embeds: [embed],
       });
+
+      console.log(
+        `[TAG REQUEST] Assigned ${factionRoleName} and ${extraRoleName} to ${interaction.user.tag}`
+      );
+
       return;
     }
 
-    const faction = interaction.options.getString("faction", true);
-    const name = interaction.options.getString("name", true).trim();
+    if (interaction.commandName === "loa") {
+      if (interaction.guildId !== guildId) {
+        await interaction.reply({
+          content: "❌ This command can only be used in the main server.",
+          ephemeral: true,
+        });
+        return;
+      }
 
-    if (!name) {
+      if (interaction.channelId !== loaChannelId) {
+        await interaction.reply({
+          content: `❌ Please use \`/loa\` in <#${loaChannelId}>.`,
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const action = interaction.options.getString("action", true);
+
+      await interaction.guild.roles.fetch();
+
+      const loaRole = interaction.guild.roles.cache.find(
+        (role) => role.name === "LOA"
+      );
+
+      if (!loaRole) {
+        await interaction.reply({
+          content: "❌ LOA role not found. Please contact staff.",
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const member = await interaction.guild.members.fetch(interaction.user.id);
+
+      if (action === "end") {
+        await member.roles.remove(loaRole);
+
+        await interaction.reply({
+          content: "✅ Your LOA has been ended.",
+          ephemeral: true,
+        });
+
+        console.log(`[LOA] Removed LOA role from ${interaction.user.tag}`);
+        return;
+      }
+
+      await member.roles.add(loaRole);
+
       await interaction.reply({
-        content: "❌ Please enter a valid name.",
+        content: "✅ You are now marked as on LOA.",
         ephemeral: true,
       });
+
+      console.log(`[LOA] Added LOA role to ${interaction.user.tag}`);
       return;
     }
 
-    const factionRoleName = factionRoles[faction];
+    if (interaction.commandName === "modteam-tag") {
+      if (!modteamGuildId || interaction.guildId !== modteamGuildId) {
+        await interaction.reply({
+          content: "❌ This command can only be used in the Modteam server.",
+          ephemeral: true,
+        });
+        return;
+      }
 
-    if (!factionRoleName) {
-      await interaction.reply({
-        content:
-          "❌ Invalid faction. If you are GARC, please read the pinned message. If not, please contact a 101st NCO.",
-        ephemeral: true,
-      });
-      return;
-    }
+      if (interaction.channelId !== modteamTagChannelId) {
+        await interaction.reply({
+          content: `❌ Please use \`/modteam-tag\` in <#${modteamTagChannelId}>.`,
+          ephemeral: true,
+        });
+        return;
+      }
 
-    await interaction.guild.roles.fetch();
+      const tag = interaction.options.getString("tag", true);
+      const roleName = modteamRoles[tag];
 
-    const factionRole = interaction.guild.roles.cache.find(
-      (role) => role.name === factionRoleName
-    );
+      if (!roleName) {
+        await interaction.reply({
+          content: "❌ Invalid tag selected.",
+          ephemeral: true,
+        });
+        return;
+      }
 
-    const extraRole = interaction.guild.roles.cache.find(
-      (role) => role.name === extraRoleName
-    );
+      await interaction.guild.roles.fetch();
 
-    const roleToRemove = interaction.guild.roles.cache.get(roleToRemoveId);
+      const role = interaction.guild.roles.cache.find(
+        (serverRole) => serverRole.name === roleName
+      );
 
-    if (!factionRole) {
-      await interaction.reply({
-        content: `❌ Requested faction role not found: **${factionRoleName}**`,
-        ephemeral: true,
-      });
-      return;
-    }
+      if (!role) {
+        await interaction.reply({
+          content: `❌ Role not found: **${roleName}**`,
+          ephemeral: true,
+        });
+        return;
+      }
 
-    if (!extraRole) {
-      await interaction.reply({
-        content: `❌ Extra role not found: **${extraRoleName}**`,
-        ephemeral: true,
-      });
-      return;
-    }
+      const member = await interaction.guild.members.fetch(interaction.user.id);
 
-    const member = await interaction.guild.members.fetch(interaction.user.id);
+      await member.roles.add(role);
 
-    await member.roles.add(factionRole);
-    await member.roles.add(extraRole);
+      let dmSent = true;
 
-    if (roleToRemove && member.roles.cache.has(roleToRemove.id)) {
-      await member.roles.remove(roleToRemove);
-    }
+      if (tag === "101st") {
+        await interaction.user
+          .send(
+            `Click the link to get the 101st role:\n${modteamSheetLink}`
+          )
+          .catch(() => {
+            dmSent = false;
+          });
+      }
 
-    let nicknameUpdated = true;
+      const embed = new EmbedBuilder()
+        .setColor(0x00ff66)
+        .setTitle("✅ Tag Assigned")
+        .setDescription(`You have been assigned the **${roleName}** role.`)
+        .setFooter({
+          text: `Requested by ${interaction.user.tag}`,
+        })
+        .setTimestamp();
 
-    await member.setNickname(name).catch(() => {
-      nicknameUpdated = false;
-    });
-
-    const embed = new EmbedBuilder()
-      .setColor(0x00ff66)
-      .setTitle("✅ Tags Assigned")
-      .setDescription(`Tags have been assigned for **${name}**.`)
-      .addFields(
-        {
-          name: "Faction",
-          value: factionRoleName,
-          inline: true,
-        },
-        {
-          name: "Member Role",
-          value: extraRoleName,
-          inline: true,
-        },
-        {
-          name: "Nickname",
-          value: nicknameUpdated
-            ? `Updated to **${name}**`
-            : "Could not update automatically. Please update your nickname manually.",
+      if (tag === "101st") {
+        embed.addFields({
+          name: "101st Link",
+          value: dmSent
+            ? "I have sent the spreadsheet link to your DMs."
+            : `I could not DM you. Please use this link:\n${modteamSheetLink}`,
           inline: false,
-        }
-      )
-      .setFooter({
-        text: `Requested by ${interaction.user.tag}`,
-      })
-      .setTimestamp();
+        });
+      }
 
-    await interaction.reply({
-      embeds: [embed],
-    });
+      await interaction.reply({
+        embeds: [embed],
+        ephemeral: true,
+      });
 
-    console.log(
-      `[TAG REQUEST] Assigned ${factionRoleName} and ${extraRoleName} to ${interaction.user.tag}`
-    );
+      console.log(`[MODTEAM TAG] Assigned ${roleName} to ${interaction.user.tag}`);
+      return;
+    }
   } catch (error) {
     console.error("Slash command error:", error);
 
     if (interaction.replied || interaction.deferred) {
       await interaction.followUp({
-        content: "❌ Something went wrong while assigning your tags.",
+        content: "❌ Something went wrong while running this command.",
         ephemeral: true,
       });
     } else {
       await interaction.reply({
-        content: "❌ Something went wrong while assigning your tags.",
+        content: "❌ Something went wrong while running this command.",
         ephemeral: true,
       });
     }
@@ -258,36 +472,6 @@ client.on("messageCreate", async (msg) => {
         });
       });
 
-      return;
-    }
-
-    if (channelName === "loa") {
-      const loaRole = msg.guild.roles.cache.find((role) => role.name === "LOA");
-
-      if (!loaRole) {
-        console.error("LOA role not found.");
-        await msg.react("❌");
-        return;
-      }
-
-      const member = await msg.guild.members.fetch(msg.author.id);
-
-      const firstLine =
-        content
-          .split(/\r?\n/)
-          .map((line) => line.trim())
-          .filter(Boolean)[0] || "";
-
-      const isEndingLoa = firstLine.toLowerCase().includes("end");
-
-      if (isEndingLoa) {
-        await member.roles.remove(loaRole);
-        await msg.react("👍");
-        return;
-      }
-
-      await member.roles.add(loaRole);
-      await msg.react("👍");
       return;
     }
   } catch (error) {
