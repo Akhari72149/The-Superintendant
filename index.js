@@ -38,12 +38,13 @@ client.on("messageCreate", async (msg) => {
 
     const content = msg.content.trim();
     const command = content.toLowerCase();
+    const channelName = msg.channel.name?.toLowerCase();
 
     // Server status command
     if (command === "server status") {
       const allowedChannels = ["bot-channel", "server-control"];
 
-      if (!allowedChannels.includes(msg.channel.name)) return;
+      if (!allowedChannels.includes(channelName)) return;
 
       await msg.channel.send("Checking server status...");
 
@@ -68,12 +69,12 @@ client.on("messageCreate", async (msg) => {
     }
 
     // LOA role handler
-    if (msg.channel.name === "loa") {
+    if (channelName === "loa") {
       const loaRole = msg.guild.roles.cache.find((role) => role.name === "LOA");
 
       if (!loaRole) {
-        await msg.react("❌");
         console.error("LOA role not found.");
+        await msg.react("❌");
         return;
       }
 
@@ -81,7 +82,7 @@ client.on("messageCreate", async (msg) => {
 
       const firstLine =
         content
-          .split("\n")
+          .split(/\r?\n/)
           .map((line) => line.trim())
           .filter(Boolean)[0] || "";
 
@@ -99,24 +100,45 @@ client.on("messageCreate", async (msg) => {
     }
 
     // Requesting tags handler
-    if (msg.channel.name === "requesting-tags") {
-      if (!content.toLowerCase().startsWith("requesting:")) return;
+    if (channelName === "requesting-tags") {
+      console.log(`[TAG REQUEST] Message received from ${msg.author.tag}: ${content}`);
 
-      const tagRequestPattern =
-        /^Requesting:\s*(\d{1,3}(?:st|nd|rd|th))\s*\nName:\s*(.+)$/i;
+      if (!command.startsWith("requesting:")) {
+        console.log("[TAG REQUEST] Ignored: message does not start with Requesting:");
+        return;
+      }
 
-      const match = content.match(tagRequestPattern);
+      const lines = content
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
 
-      if (!match) {
+      const requestingLine = lines.find((line) =>
+        line.toLowerCase().startsWith("requesting:")
+      );
+
+      const nameLine = lines.find((line) =>
+        line.toLowerCase().startsWith("name:")
+      );
+
+      if (!requestingLine || !nameLine) {
         await msg.channel.send(
-          "Check pinned messages again, you probably put a space after your unit didn't you."
+          "Invalid format. Please use:\n```Requesting: 501st\nName: Your Name```"
         );
         await msg.react("❌");
         return;
       }
 
-      const faction = match[1];
-      const name = match[2].trim();
+      const faction = requestingLine.replace(/^requesting:\s*/i, "").trim();
+      const name = nameLine.replace(/^name:\s*/i, "").trim();
+
+      if (!faction || !name) {
+        await msg.channel.send(
+          "Invalid format. Please use:\n```Requesting: 501st\nName: Your Name```"
+        );
+        await msg.react("❌");
+        return;
+      }
 
       const factionRoleName = factionRoles[faction];
 
@@ -127,6 +149,8 @@ client.on("messageCreate", async (msg) => {
         await msg.react("❌");
         return;
       }
+
+      await msg.guild.roles.fetch();
 
       const factionRole = msg.guild.roles.cache.find(
         (role) => role.name === factionRoleName
@@ -161,6 +185,10 @@ client.on("messageCreate", async (msg) => {
 
       await msg.react("👍");
       await msg.channel.send(`Tags assigned for ${name}, have you updated your name?`);
+
+      console.log(
+        `[TAG REQUEST] Assigned ${factionRoleName} and ${extraRoleName} to ${msg.author.tag}`
+      );
 
       return;
     }
