@@ -9,7 +9,7 @@ const {
   EmbedBuilder,
 } = require("discord.js");
 
-const { exec, execFile } = require("child_process");
+const { exec } = require("child_process");
 const express = require("express");
 const { createClient } = require("@supabase/supabase-js");
 
@@ -733,7 +733,7 @@ client.on("interactionCreate", async (interaction) => {
         ephemeral: true,
       });
 
-      execFile(batPath, { windowsHide: true }, async (error, stdout, stderr) => {
+      exec(`"${batPath}"`, { windowsHide: true }, async (error, stdout, stderr) => {
         if (error) {
           console.error(`[BAT ERROR] ${command}`, error);
 
