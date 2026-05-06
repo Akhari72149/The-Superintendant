@@ -37,6 +37,7 @@ const supabase =
 const requestTagsChannelId = "491197868560875530";
 const loaChannelId = "448367192040407052";
 const modteamTagChannelId = "635676190618681374";
+const statusChannelId = process.env.STATUS_CHANNEL_ID || "1283030425031278653";
 
 const factionRoles = {
   "212th": "212th Attack Battalion",
