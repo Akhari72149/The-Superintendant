@@ -332,7 +332,7 @@ const modteamCommands = [
 client.once("ready", async () => {
   console.log(`Logged in as ${client.user.tag}`);
 
-  app.listen(websiteActionPort, () => {
+  app.listen(websiteActionPort, "0.0.0.0", () => {
     console.log(
       `Website action listener running on port ${websiteActionPort}`
     );
