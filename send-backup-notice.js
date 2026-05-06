@@ -3,7 +3,7 @@ require("dotenv").config({ path: path.join(__dirname, ".env") });
 
 const { Client, GatewayIntentBits } = require("discord.js");
 
-const CHANNEL_ID = "521687660134268948";
+const CHANNEL_ID = "1142843038725591082";
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds],

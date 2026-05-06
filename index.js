@@ -37,7 +37,7 @@ const supabase =
 const requestTagsChannelId = "491197868560875530";
 const loaChannelId = "448367192040407052";
 const modteamTagChannelId = "635676190618681374";
-const batAuditChannelId = "521687660134268948";
+const batAuditChannelId = "1142843038725591082";
 
 const factionRoles = {
   "212th": "212th Attack Battalion",
@@ -84,7 +84,8 @@ const allowedUsers = [
 ];
 
 const allowedBatCommands = {
-  backup: "C:\\Users\\Administrator\\Desktop\\Bat Command Shortcuts\\backup-auto.bat",
+  Backup: "C:\\Users\\Administrator\\Desktop\\Bat Command Shortcuts\\backup-auto.bat",
+  Container: "C:\\Users\\Administrator\\Desktop\\Bat Command Shortcuts\\launch-website.bat",
 };
 
 const client = new Client({
@@ -387,7 +388,10 @@ const mainGuildCommands = [
         .setName("command")
         .setDescription("Batch command to run")
         .setRequired(true)
-        .addChoices({ name: "Backup Auto", value: "backup" })
+        .addChoices(
+              { name: "Backup Auto", value: "backup" },
+              { name: "Website Container", value: "Container" }
+        )
     ),
 ].map((command) => command.toJSON());
 
