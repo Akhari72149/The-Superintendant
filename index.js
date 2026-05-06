@@ -151,61 +151,89 @@ function buildWebsiteActionEmbed(payload, personnelMention) {
 
   const configs = {
     POSITION_ASSIGNED: {
-      title: "Member Slotted",
+      title: "🟢 POSITION ASSIGNED",
       color: 0x00ff66,
-      description: `${personnelMention} has been slotted into **${slotLabel}**.`,
+      summary: "A member has been assigned to a billet.",
+      fields: [
+        { name: "Member", value: personnelMention, inline: false },
+        { name: "Assigned Position", value: slotLabel, inline: false },
+        { name: "Section", value: slotSection, inline: true },
+        { name: "Processed By", value: processedBy, inline: true },
+      ],
     },
+
     POSITION_UNASSIGNED: {
-      title: "Member Unslotted",
+      title: "🟡 POSITION REMOVED",
       color: 0xffcc00,
-      description: `${personnelMention} has been removed from **${slotLabel}**.`,
+      summary: "A member has been removed from a billet.",
+      fields: [
+        { name: "Member", value: personnelMention, inline: false },
+        { name: "Removed Position", value: slotLabel, inline: false },
+        { name: "Section", value: slotSection, inline: true },
+        { name: "Processed By", value: processedBy, inline: true },
+      ],
     },
+
     RANK_CHANGED: {
-      title: "Rank Changed",
+      title: "🔵 PROMOTION / RANK CHANGE",
       color: 0x3498db,
-      description: `${personnelMention} has had their rank changed from **${oldRankName}** to **${rankName}**.`,
+      summary: "A rank change has been recorded.",
+      fields: [
+        { name: "Member", value: personnelMention, inline: false },
+        { name: "Previous Rank", value: oldRankName, inline: true },
+        { name: "New Rank", value: rankName, inline: true },
+        { name: "Processed By", value: processedBy, inline: false },
+      ],
     },
+
     CERTIFICATION_ASSIGNED: {
-      title: "Certification Given",
+      title: "🟣 CERTIFICATION AWARDED",
       color: 0x9b59b6,
-      description: `${personnelMention} has been given **${certName}**.`,
+      summary: "A certification has been awarded.",
+      fields: [
+        { name: "Member", value: personnelMention, inline: false },
+        { name: "Certification", value: certName, inline: true },
+        { name: "Awarded By", value: processedBy, inline: true },
+      ],
     },
+
     CERTIFICATION_REVOKED: {
-      title: "Certification Removed",
+      title: "🔴 CERTIFICATION REVOKED",
       color: 0xe74c3c,
-      description: `**${certName}** has been removed from ${personnelMention}.`,
+      summary: "A certification has been revoked.",
+      fields: [
+        { name: "Member", value: personnelMention, inline: false },
+        { name: "Certification", value: certName, inline: true },
+        { name: "Revoked By", value: processedBy, inline: true },
+      ],
     },
   };
 
   const config = configs[action] || {
-    title: "Website Action",
+    title: "⚙️ WEBSITE ACTION",
     color: 0x95a5a6,
-    description: payload.details || "A website action was performed.",
+    summary: payload.details || "A website action was performed.",
+    fields: [
+      { name: "Member", value: personnelMention, inline: false },
+      { name: "Processed By", value: processedBy, inline: true },
+      { name: "Action", value: action || "Unknown", inline: true },
+    ],
   };
 
   return new EmbedBuilder()
     .setColor(config.color)
+    .setAuthor({
+      name: "101st Doom Battalion PCS",
+    })
     .setTitle(config.title)
-    .setDescription(config.description)
+    .setDescription(config.summary)
     .addFields(
-      {
-        name: "Processed By",
-        value: processedBy,
-        inline: true,
-      },
-      {
-        name: "Section",
-        value: slotSection,
-        inline: true,
-      },
-      {
-        name: "Action",
-        value: action || "Unknown",
-        inline: true,
-      }
+      { name: "━━━━━━━━━━━━━━━━━━", value: "\u200b", inline: false },
+      ...config.fields,
+      { name: "━━━━━━━━━━━━━━━━━━", value: "\u200b", inline: false }
     )
     .setFooter({
-      text: "101st Doom Battalion PCS",
+      text: "Processed automatically via Personnel Command System",
     })
     .setTimestamp();
 }
