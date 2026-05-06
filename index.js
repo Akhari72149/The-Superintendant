@@ -9,7 +9,7 @@ const {
   EmbedBuilder,
 } = require("discord.js");
 
-const { exec } = require("child_process");
+const { exec, execFile } = require("child_process");
 const express = require("express");
 const { createClient } = require("@supabase/supabase-js");
 
@@ -77,12 +77,8 @@ ${modteamSheetLink}
 const extraRoleName = "GARC Member";
 const roleToRemoveId = "492653693091577856";
 
-const { SlashCommandBuilder } = require("discord.js");
-const { execFile } = require("child_process");
-
 const allowedUsers = [
   "593912175228354600",
-  "364551483263418368",
   "364551483263418368",
 ];
 
@@ -114,7 +110,9 @@ async function getPersonnelMentionFromSupabase(personnelId, fallbackName) {
   console.log("[website-action] Looking up target personnel ID:", personnelId);
 
   if (!supabase) {
-    console.log("[website-action] Supabase client missing. Check SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.");
+    console.log(
+      "[website-action] Supabase client missing. Check SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY."
+    );
     return fallbackName || "Unknown";
   }
 
@@ -289,9 +287,6 @@ app.post("/website-action", async (req, res) => {
 
     const channel = await client.channels.fetch(websiteAuditChannelId);
 
-
-     let statusMessageId = null;
-
     if (!channel) {
       return res.status(404).json({
         error: "Discord channel not found",
@@ -382,6 +377,17 @@ const mainGuildCommands = [
         .setDescription("Reason for LOA")
         .setRequired(false)
     ),
+
+  new SlashCommandBuilder()
+    .setName("runbat")
+    .setDescription("Run an approved server batch command")
+    .addStringOption((option) =>
+      option
+        .setName("command")
+        .setDescription("Batch command to run")
+        .setRequired(true)
+        .addChoices({ name: "Backup Auto", value: "backup" })
+    ),
 ].map((command) => command.toJSON());
 
 const modteamCommands = [
@@ -401,20 +407,7 @@ const modteamCommands = [
           { name: "38th", value: "38th" }
         )
     ),
-new SlashCommandBuilder()
-  .setName("runbat")
-  .setDescription("Run an approved server batch command")
-  .addStringOption((option) =>
-    option
-      .setName("command")
-      .setDescription("Batch command to run")
-      .setRequired(true)
-      .addChoices(
-        { name: "Backup Auto", value: "backup" }
-      )
-  )
 ].map((command) => command.toJSON());
-
 
 client.once("ready", async () => {
   console.log(`Logged in as ${client.user.tag}`);
@@ -448,9 +441,7 @@ client.once("ready", async () => {
 
       console.log("Modteam guild slash commands registered.");
     } else {
-      console.warn(
-        "MODTEAM_GUILD_ID missing in .env, skipping Modteam commands."
-      );
+      console.warn("MODTEAM_GUILD_ID missing in .env, skipping Modteam commands.");
     }
   } catch (error) {
     console.error("Failed to register slash commands:", error);
@@ -716,49 +707,58 @@ client.on("interactionCreate", async (interaction) => {
       );
       return;
     }
-    
+
     if (interaction.commandName === "runbat") {
-  if (!allowedUsers.includes(interaction.user.id)) {
-    return interaction.reply({
-      content: "❌ You are not allowed to run this command.",
-      ephemeral: true,
-    });
-  }
+      if (!allowedUsers.includes(interaction.user.id)) {
+        await interaction.reply({
+          content: "❌ You are not allowed to run this command.",
+          ephemeral: true,
+        });
+        return;
+      }
 
-  const command = interaction.options.getString("command");
-  const batPath = allowedBatCommands[command];
+      const command = interaction.options.getString("command", true);
+      const batPath = allowedBatCommands[command];
 
-  if (!batPath) {
-    return interaction.reply({
-      content: "❌ Invalid batch command.",
-      ephemeral: true,
-    });
-  }
+      if (!batPath) {
+        await interaction.reply({
+          content: "❌ Invalid batch command.",
+          ephemeral: true,
+        });
+        return;
+      }
 
-  await interaction.reply({
-    content: `⚙️ Running batch command: **${command}**`,
-    ephemeral: true,
-  });
-
-  execFile(batPath, { windowsHide: true }, async (error, stdout, stderr) => {
-    if (error) {
-      console.error(`[BAT ERROR] ${command}`, error);
-
-      return interaction.followUp({
-        content: `❌ Batch command failed:\n\`\`\`${error.message}\`\`\``,
+      await interaction.reply({
+        content: `⚙️ Running batch command: **${command}**`,
         ephemeral: true,
       });
+
+      execFile(batPath, { windowsHide: true }, async (error, stdout, stderr) => {
+        if (error) {
+          console.error(`[BAT ERROR] ${command}`, error);
+
+          await interaction.followUp({
+            content: `❌ Batch command failed:\n\`\`\`${String(
+              stderr || error.message
+            ).slice(0, 1800)}\`\`\``,
+            ephemeral: true,
+          });
+
+          return;
+        }
+
+        console.log(`[BAT SUCCESS] ${command}`);
+        if (stdout) console.log(stdout);
+        if (stderr) console.error(stderr);
+
+        await interaction.followUp({
+          content: `✅ Batch command completed successfully: **${command}**`,
+          ephemeral: true,
+        });
+      });
+
+      return;
     }
-
-    console.log(`[BAT SUCCESS] ${command}`);
-    console.log(stdout);
-
-    return interaction.followUp({
-      content: `✅ Batch command completed successfully: **${command}**`,
-      ephemeral: true,
-    });
-  });
-}
 
     if (interaction.commandName === "modteam-tag") {
       if (!modteamGuildId || interaction.guildId !== modteamGuildId) {
@@ -930,7 +930,6 @@ client.on("messageCreate", async (msg) => {
     } catch {}
   }
 });
-
 
 process.on("unhandledRejection", console.error);
 process.on("uncaughtException", console.error);
