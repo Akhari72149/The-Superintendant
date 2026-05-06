@@ -37,6 +37,7 @@ const supabase =
 const requestTagsChannelId = "491197868560875530";
 const loaChannelId = "448367192040407052";
 const modteamTagChannelId = "635676190618681374";
+const batAuditChannelId = "521687660134268948";
 
 const factionRoles = {
   "212th": "212th Attack Battalion",
@@ -709,13 +710,57 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     if (interaction.commandName === "runbat") {
-      if (!allowedUsers.includes(interaction.user.id)) {
-        await interaction.reply({
-          content: "❌ You are not allowed to run this command.",
-          ephemeral: true,
-        });
-        return;
-      }
+if (!allowedUsers.includes(interaction.user.id)) {
+  console.warn(
+    `[UNAUTHORISED BAT ACCESS] ${interaction.user.tag} (${interaction.user.id}) attempted to run /runbat`
+  );
+
+  try {
+    const auditChannel = await client.channels.fetch(batAuditChannelId);
+
+    if (auditChannel) {
+      const embed = new EmbedBuilder()
+        .setColor(0xff0000)
+        .setTitle("🚨 Unauthorized /runbat Attempt")
+        .addFields(
+          {
+            name: "User",
+            value: `${interaction.user.tag}`,
+            inline: true,
+          },
+          {
+            name: "User ID",
+            value: interaction.user.id,
+            inline: true,
+          },
+          {
+            name: "Server",
+            value: interaction.guild?.name || "Unknown",
+            inline: false,
+          },
+          {
+            name: "Channel",
+            value: `<#${interaction.channelId}>`,
+            inline: false,
+          }
+        )
+        .setTimestamp();
+
+      await auditChannel.send({
+        embeds: [embed],
+      });
+    }
+  } catch (logError) {
+    console.error("Failed to send unauthorized BAT audit log:", logError);
+  }
+
+  await interaction.reply({
+    content: "❌ You are not allowed to run this command.",
+    ephemeral: true,
+  });
+
+  return;
+}
 
       const command = interaction.options.getString("command", true);
       const batPath = allowedBatCommands[command];
