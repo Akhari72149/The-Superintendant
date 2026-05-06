@@ -228,9 +228,7 @@ app.post("/website-action", async (req, res) => {
     await channel.send({
       embeds: [embed],
       allowedMentions: {
-        users: true,
-        roles: false,
-        everyone: false,
+        parse: ["users"],
       },
     });
 
