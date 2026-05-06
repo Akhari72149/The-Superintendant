@@ -864,9 +864,6 @@ client.on("messageCreate", async (msg) => {
 });
 
 
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
-
 process.on("unhandledRejection", console.error);
 process.on("uncaughtException", console.error);
 
