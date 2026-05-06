@@ -10,12 +10,29 @@ const {
 } = require("discord.js");
 
 const { exec } = require("child_process");
+const express = require("express");
+const { createClient } = require("@supabase/supabase-js");
+
+const app = express();
+app.use(express.json());
 
 const serverStatusBatch = `"C:\\discord-bot\\commands\\Check Server Status.bat"`;
 
 const clientId = process.env.CLIENT_ID;
 const guildId = process.env.GUILD_ID;
 const modteamGuildId = process.env.MODTEAM_GUILD_ID;
+
+const websiteSecret = process.env.WEBSITE_BOT_SECRET;
+const websiteActionPort = Number(process.env.WEBSITE_ACTION_PORT || 3020);
+const websiteAuditChannelId = "719715342884143204";
+
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+const supabase =
+  supabaseUrl && supabaseServiceRoleKey
+    ? createClient(supabaseUrl, supabaseServiceRoleKey)
+    : null;
 
 const requestTagsChannelId = "491197868560875530";
 const loaChannelId = "448367192040407052";
@@ -68,6 +85,166 @@ const client = new Client({
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessageReactions,
   ],
+});
+
+async function getPersonnelMentionFromSupabase(personnelId, fallbackName) {
+  if (!supabase || !personnelId) {
+    return fallbackName || "Unknown";
+  }
+
+  const { data, error } = await supabase
+    .from("personnel")
+    .select("id, name, discord_id")
+    .eq("id", personnelId)
+    .maybeSingle();
+
+  if (error) {
+    console.error("Failed to fetch personnel from Supabase:", error);
+    return fallbackName || "Unknown";
+  }
+
+  if (!data) {
+    return fallbackName || "Unknown";
+  }
+
+  if (data.discord_id) {
+    return `<@${data.discord_id}>`;
+  }
+
+  return data.name || fallbackName || "Unknown";
+}
+
+function buildWebsiteActionEmbed(payload, personnelMention) {
+  const action = payload.action;
+
+  const processedBy = payload.processedBy || payload.processorName || "Unknown";
+  const rankName = payload.rankName || payload.newRankName || "Unknown";
+  const oldRankName = payload.oldRankName || "Unknown";
+  const certName = payload.certName || payload.certificationName || "Unknown Certification";
+  const slotLabel = payload.slotLabel || payload.target_slot_label || "Unknown Slot";
+  const slotSection = payload.slotSection || payload.target_slot_section || "N/A";
+
+  const configs = {
+    POSITION_ASSIGNED: {
+      title: "Member Slotted",
+      color: 0x00ff66,
+      description: `${personnelMention} has been slotted into **${slotLabel}**.`,
+    },
+    POSITION_UNASSIGNED: {
+      title: "Member Unslotted",
+      color: 0xffcc00,
+      description: `${personnelMention} has been removed from **${slotLabel}**.`,
+    },
+    RANK_CHANGED: {
+      title: "Rank Changed",
+      color: 0x3498db,
+      description: `${personnelMention} has had their rank changed from **${oldRankName}** to **${rankName}**.`,
+    },
+    CERTIFICATION_ASSIGNED: {
+      title: "Certification Given",
+      color: 0x9b59b6,
+      description: `${personnelMention} has been given **${certName}**.`,
+    },
+    CERTIFICATION_REVOKED: {
+      title: "Certification Removed",
+      color: 0xe74c3c,
+      description: `**${certName}** has been removed from ${personnelMention}.`,
+    },
+  };
+
+  const config = configs[action] || {
+    title: "Website Action",
+    color: 0x95a5a6,
+    description: payload.details || "A website action was performed.",
+  };
+
+  return new EmbedBuilder()
+    .setColor(config.color)
+    .setTitle(config.title)
+    .setDescription(config.description)
+    .addFields(
+      {
+        name: "Processed By",
+        value: processedBy,
+        inline: true,
+      },
+      {
+        name: "Section",
+        value: slotSection,
+        inline: true,
+      },
+      {
+        name: "Action",
+        value: action || "Unknown",
+        inline: true,
+      }
+    )
+    .setFooter({
+      text: "101st Doom Battalion PCS",
+    })
+    .setTimestamp();
+}
+
+app.post("/website-action", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+
+    if (!websiteSecret) {
+      return res.status(500).json({
+        error: "WEBSITE_BOT_SECRET is missing from bot .env",
+      });
+    }
+
+    if (authHeader !== `Bearer ${websiteSecret}`) {
+      return res.status(401).json({
+        error: "Unauthorized",
+      });
+    }
+
+    const payload = req.body || {};
+
+    const personnelId =
+      payload.target_personnel_id ||
+      payload.targetPersonnelId ||
+      payload.personnelId ||
+      payload.personnel_id ||
+      null;
+
+    const personnelMention = await getPersonnelMentionFromSupabase(
+      personnelId,
+      payload.personnelName
+    );
+
+    const channel = await client.channels.fetch(websiteAuditChannelId);
+
+    if (!channel) {
+      return res.status(404).json({
+        error: "Discord channel not found",
+      });
+    }
+
+    const embed = buildWebsiteActionEmbed(payload, personnelMention);
+
+    await channel.send({
+      embeds: [embed],
+      allowedMentions: {
+        users: true,
+        roles: false,
+        everyone: false,
+      },
+    });
+
+    return res.json({
+      success: true,
+      mentioned: personnelMention,
+    });
+  } catch (error) {
+    console.error("Website action broadcast failed:", error);
+
+    return res.status(500).json({
+      error: "Failed to broadcast website action",
+    });
+  }
 });
 
 const mainGuildCommands = [
@@ -154,6 +331,12 @@ const modteamCommands = [
 
 client.once("ready", async () => {
   console.log(`Logged in as ${client.user.tag}`);
+
+  app.listen(websiteActionPort, () => {
+    console.log(
+      `Website action listener running on port ${websiteActionPort}`
+    );
+  });
 
   if (!clientId || !guildId) {
     console.error("Missing CLIENT_ID or GUILD_ID in .env");
