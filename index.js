@@ -87,8 +87,26 @@ const client = new Client({
   ],
 });
 
+function normaliseDiscordId(value) {
+  if (!value) return null;
+
+  const cleaned = String(value)
+    .trim()
+    .replace(/[<@!>]/g, "");
+
+  return cleaned || null;
+}
+
 async function getPersonnelMentionFromSupabase(personnelId, fallbackName) {
-  if (!supabase || !personnelId) {
+  console.log("[website-action] Looking up target personnel ID:", personnelId);
+
+  if (!supabase) {
+    console.log("[website-action] Supabase client missing. Check SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.");
+    return fallbackName || "Unknown";
+  }
+
+  if (!personnelId) {
+    console.log("[website-action] No target personnel ID provided.");
     return fallbackName || "Unknown";
   }
 
@@ -99,16 +117,20 @@ async function getPersonnelMentionFromSupabase(personnelId, fallbackName) {
     .maybeSingle();
 
   if (error) {
-    console.error("Failed to fetch personnel from Supabase:", error);
+    console.error("[website-action] Failed to fetch target personnel from Supabase:", error);
     return fallbackName || "Unknown";
   }
+
+  console.log("[website-action] Target personnel from Supabase:", data);
 
   if (!data) {
     return fallbackName || "Unknown";
   }
 
-  if (data.discord_id) {
-    return `<@${data.discord_id}>`;
+  const discordId = normaliseDiscordId(data.discord_id);
+
+  if (discordId) {
+    return `<@${discordId}>`;
   }
 
   return data.name || fallbackName || "Unknown";
@@ -120,9 +142,12 @@ function buildWebsiteActionEmbed(payload, personnelMention) {
   const processedBy = payload.processedBy || payload.processorName || "Unknown";
   const rankName = payload.rankName || payload.newRankName || "Unknown";
   const oldRankName = payload.oldRankName || "Unknown";
-  const certName = payload.certName || payload.certificationName || "Unknown Certification";
-  const slotLabel = payload.slotLabel || payload.target_slot_label || "Unknown Slot";
-  const slotSection = payload.slotSection || payload.target_slot_section || "N/A";
+  const certName =
+    payload.certName || payload.certificationName || "Unknown Certification";
+  const slotLabel =
+    payload.slotLabel || payload.target_slot_label || "Unknown Slot";
+  const slotSection =
+    payload.slotSection || payload.target_slot_section || "N/A";
 
   const configs = {
     POSITION_ASSIGNED: {
@@ -203,17 +228,23 @@ app.post("/website-action", async (req, res) => {
 
     const payload = req.body || {};
 
-    const personnelId =
+    console.log("[website-action] Payload received:", payload);
+
+    const targetPersonnelId =
       payload.target_personnel_id ||
-      payload.targetPersonnelId ||
-      payload.personnelId ||
       payload.personnel_id ||
+      payload.personnelId ||
+      payload.targetPersonnelId ||
       null;
 
+    console.log("[website-action] Target personnel ID:", targetPersonnelId);
+
     const personnelMention = await getPersonnelMentionFromSupabase(
-      personnelId,
+      targetPersonnelId,
       payload.personnelName
     );
+
+    console.log("[website-action] Target personnel mention:", personnelMention);
 
     const channel = await client.channels.fetch(websiteAuditChannelId);
 
@@ -234,6 +265,7 @@ app.post("/website-action", async (req, res) => {
 
     return res.json({
       success: true,
+      target_personnel_id: targetPersonnelId,
       mentioned: personnelMention,
     });
   } catch (error) {
@@ -331,9 +363,7 @@ client.once("ready", async () => {
   console.log(`Logged in as ${client.user.tag}`);
 
   app.listen(websiteActionPort, "0.0.0.0", () => {
-    console.log(
-      `Website action listener running on port ${websiteActionPort}`
-    );
+    console.log(`Website action listener running on port ${websiteActionPort}`);
   });
 
   if (!clientId || !guildId) {
@@ -361,7 +391,9 @@ client.once("ready", async () => {
 
       console.log("Modteam guild slash commands registered.");
     } else {
-      console.warn("MODTEAM_GUILD_ID missing in .env, skipping Modteam commands.");
+      console.warn(
+        "MODTEAM_GUILD_ID missing in .env, skipping Modteam commands."
+      );
     }
   } catch (error) {
     console.error("Failed to register slash commands:", error);
