@@ -77,6 +77,19 @@ ${modteamSheetLink}
 const extraRoleName = "GARC Member";
 const roleToRemoveId = "492653693091577856";
 
+const { SlashCommandBuilder } = require("discord.js");
+const { execFile } = require("child_process");
+
+const allowedUsers = [
+  "593912175228354600",
+  "364551483263418368",
+  "364551483263418368",
+];
+
+const allowedBatCommands = {
+  backup: "C:\\Users\\Administrator\\Desktop\\Bat Command Shortcuts\\backup-auto.bat",
+};
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -388,6 +401,18 @@ const modteamCommands = [
           { name: "38th", value: "38th" }
         )
     ),
+new SlashCommandBuilder()
+  .setName("runbat")
+  .setDescription("Run an approved server batch command")
+  .addStringOption((option) =>
+    option
+      .setName("command")
+      .setDescription("Batch command to run")
+      .setRequired(true)
+      .addChoices(
+        { name: "Backup Auto", value: "backup" }
+      )
+  )
 ].map((command) => command.toJSON());
 
 
@@ -691,6 +716,49 @@ client.on("interactionCreate", async (interaction) => {
       );
       return;
     }
+    
+    if (interaction.commandName === "runbat") {
+  if (!allowedUsers.includes(interaction.user.id)) {
+    return interaction.reply({
+      content: "❌ You are not allowed to run this command.",
+      ephemeral: true,
+    });
+  }
+
+  const command = interaction.options.getString("command");
+  const batPath = allowedBatCommands[command];
+
+  if (!batPath) {
+    return interaction.reply({
+      content: "❌ Invalid batch command.",
+      ephemeral: true,
+    });
+  }
+
+  await interaction.reply({
+    content: `⚙️ Running batch command: **${command}**`,
+    ephemeral: true,
+  });
+
+  execFile(batPath, { windowsHide: true }, async (error, stdout, stderr) => {
+    if (error) {
+      console.error(`[BAT ERROR] ${command}`, error);
+
+      return interaction.followUp({
+        content: `❌ Batch command failed:\n\`\`\`${error.message}\`\`\``,
+        ephemeral: true,
+      });
+    }
+
+    console.log(`[BAT SUCCESS] ${command}`);
+    console.log(stdout);
+
+    return interaction.followUp({
+      content: `✅ Batch command completed successfully: **${command}**`,
+      ephemeral: true,
+    });
+  });
+}
 
     if (interaction.commandName === "modteam-tag") {
       if (!modteamGuildId || interaction.guildId !== modteamGuildId) {
