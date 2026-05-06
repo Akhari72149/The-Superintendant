@@ -782,29 +782,27 @@ if (!allowedUsers.includes(interaction.user.id)) {
         ephemeral: true,
       });
 
-      exec(`"${batPath}"`, { windowsHide: true }, async (error, stdout, stderr) => {
-        if (error) {
-          console.error(`[BAT ERROR] ${command}`, error);
+exec(`start "" cmd /k "${batPath}"`, async (error) => {
+  if (error) {
+    console.error(`[BAT ERROR] ${command}`, error);
 
-          await interaction.followUp({
-            content: `❌ Batch command failed:\n\`\`\`${String(
-              stderr || error.message
-            ).slice(0, 1800)}\`\`\``,
-            ephemeral: true,
-          });
+    await interaction.followUp({
+      content: `❌ Failed to launch batch command:\n\`\`\`${String(
+        error.message
+      ).slice(0, 1800)}\`\`\``,
+      ephemeral: true,
+    });
 
-          return;
-        }
+    return;
+  }
 
-        console.log(`[BAT SUCCESS] ${command}`);
-        if (stdout) console.log(stdout);
-        if (stderr) console.error(stderr);
+  console.log(`[BAT LAUNCHED] ${command}`);
 
-        await interaction.followUp({
-          content: `✅ Batch command completed successfully: **${command}**`,
-          ephemeral: true,
-        });
-      });
+  await interaction.followUp({
+    content: `✅ Batch command launched: **${command}**`,
+    ephemeral: true,
+  });
+});
 
       return;
     }
