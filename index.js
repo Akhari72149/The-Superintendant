@@ -37,7 +37,7 @@ const supabase =
 const requestTagsChannelId = "491197868560875530";
 const loaChannelId = "448367192040407052";
 const modteamTagChannelId = "635676190618681374";
-const batAuditChannelId = "1142843038725591082";
+const batAuditChannelId = "1300274704241922058";
 
 const factionRoles = {
   "212th": "212th Attack Battalion",
@@ -81,11 +81,11 @@ const roleToRemoveId = "492653693091577856";
 const allowedUsers = [
   "593912175228354600",
   "364551483263418368",
+  "561023307147640835",
 ];
 
 const allowedBatCommands = {
-  Backup: "C:\\Users\\Administrator\\Desktop\\Bat Command Shortcuts\\backup-auto.bat",
-  Container: "C:\\Users\\Administrator\\Desktop\\Bat Command Shortcuts\\launch-website.bat",
+  backup: "C:\\Users\\Administrator\\Desktop\\Bat Command Shortcuts\\backup-auto.bat",
 };
 
 const client = new Client({
@@ -388,10 +388,7 @@ const mainGuildCommands = [
         .setName("command")
         .setDescription("Batch command to run")
         .setRequired(true)
-        .addChoices(
-              { name: "Backup Auto", value: "backup" },
-              { name: "Website Container", value: "Container" }
-        )
+        .addChoices({ name: "Backup Auto", value: "backup" })
     ),
 ].map((command) => command.toJSON());
 
@@ -782,27 +779,29 @@ if (!allowedUsers.includes(interaction.user.id)) {
         ephemeral: true,
       });
 
-exec(`start "" cmd /k "${batPath}"`, async (error) => {
-  if (error) {
-    console.error(`[BAT ERROR] ${command}`, error);
+      exec(`"${batPath}"`, { windowsHide: true }, async (error, stdout, stderr) => {
+        if (error) {
+          console.error(`[BAT ERROR] ${command}`, error);
 
-    await interaction.followUp({
-      content: `❌ Failed to launch batch command:\n\`\`\`${String(
-        error.message
-      ).slice(0, 1800)}\`\`\``,
-      ephemeral: true,
-    });
+          await interaction.followUp({
+            content: `❌ Batch command failed:\n\`\`\`${String(
+              stderr || error.message
+            ).slice(0, 1800)}\`\`\``,
+            ephemeral: true,
+          });
 
-    return;
-  }
+          return;
+        }
 
-  console.log(`[BAT LAUNCHED] ${command}`);
+        console.log(`[BAT SUCCESS] ${command}`);
+        if (stdout) console.log(stdout);
+        if (stderr) console.error(stderr);
 
-  await interaction.followUp({
-    content: `✅ Batch command launched: **${command}**`,
-    ephemeral: true,
-  });
-});
+        await interaction.followUp({
+          content: `✅ Batch command completed successfully: **${command}**`,
+          ephemeral: true,
+        });
+      });
 
       return;
     }
