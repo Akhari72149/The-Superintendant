@@ -276,6 +276,10 @@ app.post("/website-action", async (req, res) => {
 
     const channel = await client.channels.fetch(websiteAuditChannelId);
 
+    const statusChannelId = process.env.STATUS_CHANNEL_ID;
+
+     let statusMessageId = null;
+
     if (!channel) {
       return res.status(404).json({
         error: "Discord channel not found",
@@ -387,8 +391,74 @@ const modteamCommands = [
     ),
 ].map((command) => command.toJSON());
 
+async function updateBotStatus(status = "online") {
+  try {
+    if (!statusChannelId) return;
+
+    const channel = await client.channels.fetch(statusChannelId);
+
+    if (!channel) {
+      console.error("Status channel not found.");
+      return;
+    }
+
+    const isOnline = status === "online";
+
+    const embed = new EmbedBuilder()
+      .setColor(isOnline ? 0x00ff66 : 0xff0000)
+      .setTitle("Superintendent Status")
+      .setDescription(
+        isOnline
+          ? "🟢 I am ONLINE and operational."
+          : "🔴 I am currently OFFLINE or restarting."
+      )
+      .addFields(
+        {
+          name: "Status",
+          value: isOnline ? "ONLINE" : "OFFLINE",
+          inline: true,
+        },
+        {
+          name: "Last Updated",
+          value: `<t:${Math.floor(Date.now() / 1000)}:F>`,
+          inline: true,
+        }
+      )
+      .setFooter({
+        text: "101st Doom Battalion Systems",
+      })
+      .setTimestamp();
+
+    const messages = await channel.messages.fetch({ limit: 10 });
+
+    const existingMessage = messages.find(
+      (m) =>
+        m.author.id === client.user.id &&
+        m.embeds.length > 0 &&
+        m.embeds[0].title === "101st PCS Bot Status"
+    );
+
+    if (existingMessage) {
+      await existingMessage.edit({
+        embeds: [embed],
+      });
+
+      statusMessageId = existingMessage.id;
+    } else {
+      const sent = await channel.send({
+        embeds: [embed],
+      });
+
+      statusMessageId = sent.id;
+    }
+  } catch (error) {
+    console.error("Failed to update bot status embed:", error);
+  }
+}
+
 client.once("ready", async () => {
   console.log(`Logged in as ${client.user.tag}`);
+  await updateBotStatus("online");
 
   app.listen(websiteActionPort, "0.0.0.0", () => {
     console.log(`Website action listener running on port ${websiteActionPort}`);
@@ -858,6 +928,17 @@ client.on("messageCreate", async (msg) => {
     } catch {}
   }
 });
+
+async function shutdown() {
+  console.log("Shutting down bot...");
+
+  await updateBotStatus("offline");
+
+  process.exit(0);
+}
+
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
 
 process.on("unhandledRejection", console.error);
 process.on("uncaughtException", console.error);
