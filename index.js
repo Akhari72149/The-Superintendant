@@ -85,7 +85,8 @@ const allowedUsers = [
 ];
 
 const allowedBatCommands = {
-  backup: "C:\\Users\\Administrator\\Desktop\\Bat Command Shortcuts\\backup-auto.bat",
+  backup:
+    "C:\\Users\\Administrator\\Desktop\\Bat Command Shortcuts\\backup-auto.bat",
 };
 
 const client = new Client({
@@ -113,7 +114,7 @@ async function getPersonnelMentionFromSupabase(personnelId, fallbackName) {
 
   if (!supabase) {
     console.log(
-      "[website-action] Supabase client missing. Check SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY."
+      "[website-action] Supabase client missing. Check SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.",
     );
     return fallbackName || "Unknown";
   }
@@ -130,7 +131,10 @@ async function getPersonnelMentionFromSupabase(personnelId, fallbackName) {
     .maybeSingle();
 
   if (error) {
-    console.error("[website-action] Failed to fetch target personnel from Supabase:", error);
+    console.error(
+      "[website-action] Failed to fetch target personnel from Supabase:",
+      error,
+    );
     return fallbackName || "Unknown";
   }
 
@@ -243,7 +247,7 @@ function buildWebsiteActionEmbed(payload, personnelMention) {
     .addFields(
       { name: "━━━━━━━━━━━━━━━━━━", value: "\u200b", inline: false },
       ...config.fields,
-      { name: "━━━━━━━━━━━━━━━━━━", value: "\u200b", inline: false }
+      { name: "━━━━━━━━━━━━━━━━━━", value: "\u200b", inline: false },
     )
     .setFooter({
       text: "Processed automatically via Personnel Command System",
@@ -282,7 +286,7 @@ app.post("/website-action", async (req, res) => {
 
     const personnelMention = await getPersonnelMentionFromSupabase(
       targetPersonnelId,
-      payload.personnelName
+      payload.personnelName,
     );
 
     console.log("[website-action] Target personnel mention:", personnelMention);
@@ -332,59 +336,59 @@ const mainGuildCommands = [
           { name: "501st Legion", value: "501st" },
           { name: "91st Recon Company", value: "91st" },
           { name: "327th Star Corps", value: "327th" },
-          { name: "38th Assault Corps", value: "38th" }
-        )
+          { name: "38th Assault Corps", value: "38th" },
+        ),
     )
     .addStringOption((option) =>
       option
         .setName("name")
         .setDescription("Your requested Discord/unit name")
-        .setRequired(true)
+        .setRequired(true),
     ),
 
-new SlashCommandBuilder()
-  .setName("loa")
-  .setDescription("Start or end Leave of Absence")
-  .addStringOption((option) =>
-    option
-      .setName("action")
-      .setDescription("Choose whether to start or end LOA")
-      .setRequired(true)
-      .addChoices(
-        { name: "Start LOA", value: "start" },
-        { name: "End LOA", value: "end" }
-      )
-  )
-  .addStringOption((option) =>
-    option
-      .setName("type")
-      .setDescription("Select the LOA type")
-      .setRequired(false)
-      .addChoices(
-        { name: "LOA", value: "LOA" },
-        { name: "SLOA", value: "SLOA" },
-        { name: "ELOA", value: "ELOA" },
-        { name: "ULOA", value: "ULOA" }
-      )
-  )
-  .addStringOption((option) =>
-    option
-      .setName("expected_end")
-      .setDescription("Expected LOA end date, e.g. 20/05/2026")
-      .setRequired(false)
-  )
-  .addStringOption((option) =>
-    option
-      .setName("reason")
-      .setDescription("Reason for LOA")
-      .setRequired(false)
-  )
-  .addUserOption((option) =>
-    option
-      .setName("ping")
-      .setDescription("User to ping with this LOA message")
-      .setRequired(false)
-  ),
+  new SlashCommandBuilder()
+    .setName("loa")
+    .setDescription("Start or end Leave of Absence")
+    .addStringOption((option) =>
+      option
+        .setName("action")
+        .setDescription("Choose whether to start or end LOA")
+        .setRequired(true)
+        .addChoices(
+          { name: "Start LOA", value: "start" },
+          { name: "End LOA", value: "end" },
+        ),
+    )
+    .addStringOption((option) =>
+      option
+        .setName("type")
+        .setDescription("Select the LOA type")
+        .setRequired(false)
+        .addChoices(
+          { name: "LOA", value: "LOA" },
+          { name: "SLOA", value: "SLOA" },
+          { name: "ELOA", value: "ELOA" },
+          { name: "ULOA", value: "ULOA" },
+        ),
+    )
+    .addStringOption((option) =>
+      option
+        .setName("expected_end")
+        .setDescription("Expected LOA end date, e.g. 20/05/2026")
+        .setRequired(false),
+    )
+    .addStringOption((option) =>
+      option
+        .setName("reason")
+        .setDescription("Reason for LOA")
+        .setRequired(false),
+    )
+    .addStringOption((option) =>
+      option
+        .setName("pings")
+        .setDescription("Users or roles to ping")
+        .setRequired(false),
+    ),
 
   new SlashCommandBuilder()
     .setName("runbat")
@@ -394,7 +398,7 @@ new SlashCommandBuilder()
         .setName("command")
         .setDescription("Batch command to run")
         .setRequired(true)
-        .addChoices({ name: "Backup Auto", value: "backup" })
+        .addChoices({ name: "Backup Auto", value: "backup" }),
     ),
 ].map((command) => command.toJSON());
 
@@ -412,8 +416,8 @@ const modteamCommands = [
           { name: "501st", value: "501st" },
           { name: "91st", value: "91st" },
           { name: "327th", value: "327th" },
-          { name: "38th", value: "38th" }
-        )
+          { name: "38th", value: "38th" },
+        ),
     ),
 ].map((command) => command.toJSON());
 
@@ -443,13 +447,18 @@ client.once("ready", async () => {
     if (modteamGuildId) {
       console.log("Registering Modteam guild slash commands...");
 
-      await rest.put(Routes.applicationGuildCommands(clientId, modteamGuildId), {
-        body: modteamCommands,
-      });
+      await rest.put(
+        Routes.applicationGuildCommands(clientId, modteamGuildId),
+        {
+          body: modteamCommands,
+        },
+      );
 
       console.log("Modteam guild slash commands registered.");
     } else {
-      console.warn("MODTEAM_GUILD_ID missing in .env, skipping Modteam commands.");
+      console.warn(
+        "MODTEAM_GUILD_ID missing in .env, skipping Modteam commands.",
+      );
     }
   } catch (error) {
     console.error("Failed to register slash commands:", error);
@@ -510,11 +519,11 @@ client.on("interactionCreate", async (interaction) => {
       await interaction.guild.roles.fetch();
 
       const factionRole = interaction.guild.roles.cache.find(
-        (role) => role.name === factionRoleName
+        (role) => role.name === factionRoleName,
       );
 
       const extraRole = interaction.guild.roles.cache.find(
-        (role) => role.name === extraRoleName
+        (role) => role.name === extraRoleName,
       );
 
       const roleToRemove = interaction.guild.roles.cache.get(roleToRemoveId);
@@ -571,7 +580,7 @@ client.on("interactionCreate", async (interaction) => {
               ? `Updated to **${name}**`
               : "Could not update automatically. Please update your nickname manually.",
             inline: false,
-          }
+          },
         )
         .setFooter({
           text: `Requested by ${interaction.user.tag}`,
@@ -583,224 +592,222 @@ client.on("interactionCreate", async (interaction) => {
       });
 
       console.log(
-        `[TAG REQUEST] Assigned ${factionRoleName} and ${extraRoleName} to ${interaction.user.tag}`
+        `[TAG REQUEST] Assigned ${factionRoleName} and ${extraRoleName} to ${interaction.user.tag}`,
       );
 
       return;
     }
 
-if (interaction.commandName === "loa") {
-  if (interaction.guildId !== guildId) {
-    await interaction.reply({
-      content: "❌ This command can only be used in the main server.",
-      ephemeral: true,
-    });
-    return;
-  }
-
-  if (interaction.channelId !== loaChannelId) {
-    await interaction.reply({
-      content: `❌ Please use \`/loa\` in <#${loaChannelId}>.`,
-      ephemeral: true,
-    });
-    return;
-  }
-
-  const action = interaction.options.getString("action", true);
-  const loaType = interaction.options.getString("type") || "LOA";
-  const expectedEnd =
-    interaction.options.getString("expected_end")?.trim() || "Not provided";
-  const reason =
-    interaction.options.getString("reason")?.trim() || "No reason provided.";
-
-  const pingUser = interaction.options.getUser("ping");
-  const pingContent = pingUser ? `${pingUser}` : "";
-
-  await interaction.guild.roles.fetch();
-
-  const loaRole = interaction.guild.roles.cache.find(
-    (role) => role.name === "LOA"
-  );
-
-  if (!loaRole) {
-    await interaction.reply({
-      content: "❌ LOA role not found. Please contact staff.",
-      ephemeral: true,
-    });
-    return;
-  }
-
-  const member = await interaction.guild.members.fetch(interaction.user.id);
-
-  if (action === "end") {
-    await member.roles.remove(loaRole);
-
-    const embed = new EmbedBuilder()
-      .setColor(0xff5555)
-      .setTitle("✅ LOA Ended")
-      .setDescription(`${interaction.user} has ended their Leave of Absence.`)
-      .addFields(
-        {
-          name: "Member",
-          value: `${interaction.user}`,
-          inline: true,
-        },
-        {
-          name: "LOA Type",
-          value: loaType,
-          inline: true,
-        },
-        {
-          name: "Expected End Date",
-          value: expectedEnd,
-          inline: true,
-        },
-        {
-          name: "Pinged",
-          value: pingUser ? `${pingUser}` : "None",
-          inline: true,
-        },
-        {
-          name: "Reason",
-          value: reason,
-          inline: false,
-        }
-      )
-      .setFooter({
-        text: `Requested by ${interaction.user.tag}`,
-      })
-      .setTimestamp();
-
-    await interaction.reply({
-      content: pingContent,
-      embeds: [embed],
-      allowedMentions: pingUser
-        ? {
-            users: [pingUser.id],
-          }
-        : {
-            users: [],
-          },
-    });
-
-    console.log(
-      `[LOA] Removed LOA role from ${interaction.user.tag} | Type: ${loaType} | Expected End: ${expectedEnd} | Pinged: ${
-        pingUser ? pingUser.tag : "None"
-      } | Reason: ${reason}`
-    );
-    return;
-  }
-
-  await member.roles.add(loaRole);
-
-  const embed = new EmbedBuilder()
-    .setColor(0x00ff66)
-    .setTitle("✅ LOA Started")
-    .setDescription(`${interaction.user} is now marked as on Leave of Absence.`)
-    .addFields(
-      {
-        name: "Member",
-        value: `${interaction.user}`,
-        inline: true,
-      },
-      {
-        name: "LOA Type",
-        value: loaType,
-        inline: true,
-      },
-      {
-        name: "Expected End Date",
-        value: expectedEnd,
-        inline: true,
-      },
-      {
-        name: "Pinged",
-        value: pingUser ? `${pingUser}` : "None",
-        inline: true,
-      },
-      {
-        name: "Reason",
-        value: reason,
-        inline: false,
+    if (interaction.commandName === "loa") {
+      if (interaction.guildId !== guildId) {
+        await interaction.reply({
+          content: "❌ This command can only be used in the main server.",
+          ephemeral: true,
+        });
+        return;
       }
-    )
-    .setFooter({
-      text: `Requested by ${interaction.user.tag}`,
-    })
-    .setTimestamp();
 
-  await interaction.reply({
-    content: pingContent,
-    embeds: [embed],
-    allowedMentions: pingUser
-      ? {
-          users: [pingUser.id],
-        }
-      : {
-          users: [],
-        },
-  });
+      if (interaction.channelId !== loaChannelId) {
+        await interaction.reply({
+          content: `❌ Please use \`/loa\` in <#${loaChannelId}>.`,
+          ephemeral: true,
+        });
+        return;
+      }
 
-  console.log(
-    `[LOA] Added LOA role to ${interaction.user.tag} | Type: ${loaType} | Expected End: ${expectedEnd} | Pinged: ${
-      pingUser ? pingUser.tag : "None"
-    } | Reason: ${reason}`
-  );
-  return;
-}
+      const action = interaction.options.getString("action", true);
+      const loaType = interaction.options.getString("type") || "LOA";
+      const expectedEnd =
+        interaction.options.getString("expected_end")?.trim() || "Not provided";
+      const reason =
+        interaction.options.getString("reason")?.trim() ||
+        "No reason provided.";
 
-    if (interaction.commandName === "runbat") {
-if (!allowedUsers.includes(interaction.user.id)) {
-  console.warn(
-    `[UNAUTHORISED BAT ACCESS] ${interaction.user.tag} (${interaction.user.id}) attempted to run /runbat`
-  );
+      const pings = interaction.options.getString("pings")?.trim() || "";
 
-  try {
-    const auditChannel = await client.channels.fetch(batAuditChannelId);
+      const pingContent = pings;
 
-    if (auditChannel) {
+      await interaction.guild.roles.fetch();
+
+      const loaRole = interaction.guild.roles.cache.find(
+        (role) => role.name === "LOA",
+      );
+
+      if (!loaRole) {
+        await interaction.reply({
+          content: "❌ LOA role not found. Please contact staff.",
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const member = await interaction.guild.members.fetch(interaction.user.id);
+
+      if (action === "end") {
+        await member.roles.remove(loaRole);
+
+        const embed = new EmbedBuilder()
+          .setColor(0xff5555)
+          .setTitle("✅ LOA Ended")
+          .setDescription(
+            `${interaction.user} has ended their Leave of Absence.`,
+          )
+          .addFields(
+            {
+              name: "Member",
+              value: `${interaction.user}`,
+              inline: true,
+            },
+            {
+              name: "LOA Type",
+              value: loaType,
+              inline: true,
+            },
+            {
+              name: "Expected End Date",
+              value: expectedEnd,
+              inline: true,
+            },
+            {
+              name: "Pinged",
+              value: pings || "None",
+              inline: true,
+            },
+            {
+              name: "Reason",
+              value: reason,
+              inline: false,
+            },
+          )
+          .setFooter({
+            text: `Requested by ${interaction.user.tag}`,
+          })
+          .setTimestamp();
+
+        await interaction.reply({
+          content: pingContent,
+          embeds: [embed],
+          allowedMentions: {
+            parse: ["users", "roles"],
+          },
+        });
+
+        console.log(
+          `[LOA] Removed LOA role from ${interaction.user.tag} | Type: ${loaType} | Expected End: ${expectedEnd} | Pinged: ${
+            pingUser ? pingUser.tag : "None"
+          } | Reason: ${reason}`,
+        );
+        return;
+      }
+
+      await member.roles.add(loaRole);
+
       const embed = new EmbedBuilder()
-        .setColor(0xff0000)
-        .setTitle("🚨 Unauthorized /runbat Attempt")
+        .setColor(0x00ff66)
+        .setTitle("✅ LOA Started")
+        .setDescription(
+          `${interaction.user} is now marked as on Leave of Absence.`,
+        )
         .addFields(
           {
-            name: "User",
-            value: `${interaction.user.tag}`,
+            name: "Member",
+            value: `${interaction.user}`,
             inline: true,
           },
           {
-            name: "User ID",
-            value: interaction.user.id,
+            name: "LOA Type",
+            value: loaType,
             inline: true,
           },
           {
-            name: "Server",
-            value: interaction.guild?.name || "Unknown",
-            inline: false,
+            name: "Expected End Date",
+            value: expectedEnd,
+            inline: true,
           },
           {
-            name: "Channel",
-            value: `<#${interaction.channelId}>`,
+            name: "Pinged",
+            value: pings || "None",
+            inline: true,
+          },
+          {
+            name: "Reason",
+            value: reason,
             inline: false,
-          }
+          },
         )
+        .setFooter({
+          text: `Requested by ${interaction.user.tag}`,
+        })
         .setTimestamp();
 
-      await auditChannel.send({
+      await interaction.reply({
+        content: pingContent,
         embeds: [embed],
+        allowedMentions: {
+          parse: ["users", "roles"],
+        },
       });
+
+      console.log(
+        `[LOA] Added LOA role to ${interaction.user.tag} | Type: ${loaType} | Expected End: ${expectedEnd} | Pinged: ${
+          pingUser ? pingUser.tag : "None"
+        } | Reason: ${reason}`,
+      );
+      return;
     }
-  } catch (logError) {
-    console.error("Failed to send unauthorized BAT audit log:", logError);
-  }
 
-  await interaction.reply({
-    content: "❌ You are not allowed to run this command.",
-    ephemeral: true,
-  });
+    if (interaction.commandName === "runbat") {
+      if (!allowedUsers.includes(interaction.user.id)) {
+        console.warn(
+          `[UNAUTHORISED BAT ACCESS] ${interaction.user.tag} (${interaction.user.id}) attempted to run /runbat`,
+        );
 
-  return;
-}
+        try {
+          const auditChannel = await client.channels.fetch(batAuditChannelId);
+
+          if (auditChannel) {
+            const embed = new EmbedBuilder()
+              .setColor(0xff0000)
+              .setTitle("🚨 Unauthorized /runbat Attempt")
+              .addFields(
+                {
+                  name: "User",
+                  value: `${interaction.user.tag}`,
+                  inline: true,
+                },
+                {
+                  name: "User ID",
+                  value: interaction.user.id,
+                  inline: true,
+                },
+                {
+                  name: "Server",
+                  value: interaction.guild?.name || "Unknown",
+                  inline: false,
+                },
+                {
+                  name: "Channel",
+                  value: `<#${interaction.channelId}>`,
+                  inline: false,
+                },
+              )
+              .setTimestamp();
+
+            await auditChannel.send({
+              embeds: [embed],
+            });
+          }
+        } catch (logError) {
+          console.error("Failed to send unauthorized BAT audit log:", logError);
+        }
+
+        await interaction.reply({
+          content: "❌ You are not allowed to run this command.",
+          ephemeral: true,
+        });
+
+        return;
+      }
 
       const command = interaction.options.getString("command", true);
       const batPath = allowedBatCommands[command];
@@ -818,29 +825,33 @@ if (!allowedUsers.includes(interaction.user.id)) {
         ephemeral: true,
       });
 
-      exec(`"${batPath}"`, { windowsHide: true }, async (error, stdout, stderr) => {
-        if (error) {
-          console.error(`[BAT ERROR] ${command}`, error);
+      exec(
+        `"${batPath}"`,
+        { windowsHide: true },
+        async (error, stdout, stderr) => {
+          if (error) {
+            console.error(`[BAT ERROR] ${command}`, error);
+
+            await interaction.followUp({
+              content: `❌ Batch command failed:\n\`\`\`${String(
+                stderr || error.message,
+              ).slice(0, 1800)}\`\`\``,
+              ephemeral: true,
+            });
+
+            return;
+          }
+
+          console.log(`[BAT SUCCESS] ${command}`);
+          if (stdout) console.log(stdout);
+          if (stderr) console.error(stderr);
 
           await interaction.followUp({
-            content: `❌ Batch command failed:\n\`\`\`${String(
-              stderr || error.message
-            ).slice(0, 1800)}\`\`\``,
+            content: `✅ Batch command completed successfully: **${command}**`,
             ephemeral: true,
           });
-
-          return;
-        }
-
-        console.log(`[BAT SUCCESS] ${command}`);
-        if (stdout) console.log(stdout);
-        if (stderr) console.error(stderr);
-
-        await interaction.followUp({
-          content: `✅ Batch command completed successfully: **${command}**`,
-          ephemeral: true,
-        });
-      });
+        },
+      );
 
       return;
     }
@@ -876,7 +887,7 @@ if (!allowedUsers.includes(interaction.user.id)) {
       await interaction.guild.roles.fetch();
 
       const selectedRole = interaction.guild.roles.cache.find(
-        (serverRole) => serverRole.name === roleName
+        (serverRole) => serverRole.name === roleName,
       );
 
       if (!selectedRole) {
@@ -894,7 +905,7 @@ if (!allowedUsers.includes(interaction.user.id)) {
       const rolesToRemove = member.roles.cache.filter(
         (memberRole) =>
           modteamRoleNames.includes(memberRole.name) &&
-          memberRole.id !== selectedRole.id
+          memberRole.id !== selectedRole.id,
       );
 
       if (rolesToRemove.size > 0) {
@@ -950,7 +961,7 @@ if (!allowedUsers.includes(interaction.user.id)) {
           rolesToRemove.size > 0
             ? rolesToRemove.map((role) => role.name).join(", ")
             : "None"
-        }`
+        }`,
       );
 
       return;
@@ -991,7 +1002,7 @@ client.on("messageCreate", async (msg) => {
       exec(serverStatusBatch, async (error, stdout, stderr) => {
         if (error) {
           console.error(
-            `Error executing Server Status command: ${stderr || error.message}`
+            `Error executing Server Status command: ${stderr || error.message}`,
           );
 
           await msg.channel.send("Failed to check server status.");
