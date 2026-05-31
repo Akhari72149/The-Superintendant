@@ -342,43 +342,49 @@ const mainGuildCommands = [
         .setRequired(true)
     ),
 
-  new SlashCommandBuilder()
-    .setName("loa")
-    .setDescription("Start or end Leave of Absence")
-    .addStringOption((option) =>
-      option
-        .setName("action")
-        .setDescription("Choose whether to start or end LOA")
-        .setRequired(true)
-        .addChoices(
-          { name: "Start LOA", value: "start" },
-          { name: "End LOA", value: "end" }
-        )
-    )
-    .addStringOption((option) =>
-      option
-        .setName("type")
-        .setDescription("Select the LOA type")
-        .setRequired(false)
-        .addChoices(
-          { name: "LOA", value: "LOA" },
-          { name: "SLOA", value: "SLOA" },
-          { name: "ELOA", value: "ELOA" },
-          { name: "ULOA", value: "ULOA" }
-        )
-    )
-    .addStringOption((option) =>
-      option
-        .setName("expected_end")
-        .setDescription("Expected LOA end date, e.g. 20/05/2026")
-        .setRequired(false)
-    )
-    .addStringOption((option) =>
-      option
-        .setName("reason")
-        .setDescription("Reason for LOA")
-        .setRequired(false)
-    ),
+new SlashCommandBuilder()
+  .setName("loa")
+  .setDescription("Start or end Leave of Absence")
+  .addStringOption((option) =>
+    option
+      .setName("action")
+      .setDescription("Choose whether to start or end LOA")
+      .setRequired(true)
+      .addChoices(
+        { name: "Start LOA", value: "start" },
+        { name: "End LOA", value: "end" }
+      )
+  )
+  .addStringOption((option) =>
+    option
+      .setName("type")
+      .setDescription("Select the LOA type")
+      .setRequired(false)
+      .addChoices(
+        { name: "LOA", value: "LOA" },
+        { name: "SLOA", value: "SLOA" },
+        { name: "ELOA", value: "ELOA" },
+        { name: "ULOA", value: "ULOA" }
+      )
+  )
+  .addStringOption((option) =>
+    option
+      .setName("expected_end")
+      .setDescription("Expected LOA end date, e.g. 20/05/2026")
+      .setRequired(false)
+  )
+  .addStringOption((option) =>
+    option
+      .setName("reason")
+      .setDescription("Reason for LOA")
+      .setRequired(false)
+  )
+  .addUserOption((option) =>
+    option
+      .setName("ping")
+      .setDescription("User to ping with this LOA message")
+      .setRequired(false)
+  ),
 
   new SlashCommandBuilder()
     .setName("runbat")
@@ -583,132 +589,165 @@ client.on("interactionCreate", async (interaction) => {
       return;
     }
 
-    if (interaction.commandName === "loa") {
-      if (interaction.guildId !== guildId) {
-        await interaction.reply({
-          content: "❌ This command can only be used in the main server.",
-          ephemeral: true,
-        });
-        return;
-      }
+if (interaction.commandName === "loa") {
+  if (interaction.guildId !== guildId) {
+    await interaction.reply({
+      content: "❌ This command can only be used in the main server.",
+      ephemeral: true,
+    });
+    return;
+  }
 
-      if (interaction.channelId !== loaChannelId) {
-        await interaction.reply({
-          content: `❌ Please use \`/loa\` in <#${loaChannelId}>.`,
-          ephemeral: true,
-        });
-        return;
-      }
+  if (interaction.channelId !== loaChannelId) {
+    await interaction.reply({
+      content: `❌ Please use \`/loa\` in <#${loaChannelId}>.`,
+      ephemeral: true,
+    });
+    return;
+  }
 
-      const action = interaction.options.getString("action", true);
-      const loaType = interaction.options.getString("type") || "LOA";
-      const expectedEnd =
-        interaction.options.getString("expected_end")?.trim() || "Not provided";
-      const reason =
-        interaction.options.getString("reason")?.trim() || "No reason provided.";
+  const action = interaction.options.getString("action", true);
+  const loaType = interaction.options.getString("type") || "LOA";
+  const expectedEnd =
+    interaction.options.getString("expected_end")?.trim() || "Not provided";
+  const reason =
+    interaction.options.getString("reason")?.trim() || "No reason provided.";
 
-      await interaction.guild.roles.fetch();
+  const pingUser = interaction.options.getUser("ping");
+  const pingContent = pingUser ? `${pingUser}` : "";
 
-      const loaRole = interaction.guild.roles.cache.find(
-        (role) => role.name === "LOA"
-      );
+  await interaction.guild.roles.fetch();
 
-      if (!loaRole) {
-        await interaction.reply({
-          content: "❌ LOA role not found. Please contact staff.",
-          ephemeral: true,
-        });
-        return;
-      }
+  const loaRole = interaction.guild.roles.cache.find(
+    (role) => role.name === "LOA"
+  );
 
-      const member = await interaction.guild.members.fetch(interaction.user.id);
+  if (!loaRole) {
+    await interaction.reply({
+      content: "❌ LOA role not found. Please contact staff.",
+      ephemeral: true,
+    });
+    return;
+  }
 
-      if (action === "end") {
-        await member.roles.remove(loaRole);
+  const member = await interaction.guild.members.fetch(interaction.user.id);
 
-        const embed = new EmbedBuilder()
-          .setColor(0xff5555)
-          .setTitle("✅ LOA Ended")
-          .setDescription(`${interaction.user} has ended their Leave of Absence.`)
-          .addFields(
-            {
-              name: "Member",
-              value: `${interaction.user}`,
-              inline: true,
-            },
-            {
-              name: "LOA Type",
-              value: loaType,
-              inline: true,
-            },
-            {
-              name: "Expected End Date",
-              value: expectedEnd,
-              inline: true,
-            },
-            {
-              name: "Reason",
-              value: reason,
-              inline: false,
-            }
-          )
-          .setFooter({
-            text: `Requested by ${interaction.user.tag}`,
-          })
-          .setTimestamp();
+  if (action === "end") {
+    await member.roles.remove(loaRole);
 
-        await interaction.reply({
-          embeds: [embed],
-        });
+    const embed = new EmbedBuilder()
+      .setColor(0xff5555)
+      .setTitle("✅ LOA Ended")
+      .setDescription(`${interaction.user} has ended their Leave of Absence.`)
+      .addFields(
+        {
+          name: "Member",
+          value: `${interaction.user}`,
+          inline: true,
+        },
+        {
+          name: "LOA Type",
+          value: loaType,
+          inline: true,
+        },
+        {
+          name: "Expected End Date",
+          value: expectedEnd,
+          inline: true,
+        },
+        {
+          name: "Pinged",
+          value: pingUser ? `${pingUser}` : "None",
+          inline: true,
+        },
+        {
+          name: "Reason",
+          value: reason,
+          inline: false,
+        }
+      )
+      .setFooter({
+        text: `Requested by ${interaction.user.tag}`,
+      })
+      .setTimestamp();
 
-        console.log(
-          `[LOA] Removed LOA role from ${interaction.user.tag} | Type: ${loaType} | Expected End: ${expectedEnd} | Reason: ${reason}`
-        );
-        return;
-      }
-
-      await member.roles.add(loaRole);
-
-      const embed = new EmbedBuilder()
-        .setColor(0x00ff66)
-        .setTitle("✅ LOA Started")
-        .setDescription(`${interaction.user} is now marked as on Leave of Absence.`)
-        .addFields(
-          {
-            name: "Member",
-            value: `${interaction.user}`,
-            inline: true,
-          },
-          {
-            name: "LOA Type",
-            value: loaType,
-            inline: true,
-          },
-          {
-            name: "Expected End Date",
-            value: expectedEnd,
-            inline: true,
-          },
-          {
-            name: "Reason",
-            value: reason,
-            inline: false,
+    await interaction.reply({
+      content: pingContent,
+      embeds: [embed],
+      allowedMentions: pingUser
+        ? {
+            users: [pingUser.id],
           }
-        )
-        .setFooter({
-          text: `Requested by ${interaction.user.tag}`,
-        })
-        .setTimestamp();
+        : {
+            users: [],
+          },
+    });
 
-      await interaction.reply({
-        embeds: [embed],
-      });
+    console.log(
+      `[LOA] Removed LOA role from ${interaction.user.tag} | Type: ${loaType} | Expected End: ${expectedEnd} | Pinged: ${
+        pingUser ? pingUser.tag : "None"
+      } | Reason: ${reason}`
+    );
+    return;
+  }
 
-      console.log(
-        `[LOA] Added LOA role to ${interaction.user.tag} | Type: ${loaType} | Expected End: ${expectedEnd} | Reason: ${reason}`
-      );
-      return;
-    }
+  await member.roles.add(loaRole);
+
+  const embed = new EmbedBuilder()
+    .setColor(0x00ff66)
+    .setTitle("✅ LOA Started")
+    .setDescription(`${interaction.user} is now marked as on Leave of Absence.`)
+    .addFields(
+      {
+        name: "Member",
+        value: `${interaction.user}`,
+        inline: true,
+      },
+      {
+        name: "LOA Type",
+        value: loaType,
+        inline: true,
+      },
+      {
+        name: "Expected End Date",
+        value: expectedEnd,
+        inline: true,
+      },
+      {
+        name: "Pinged",
+        value: pingUser ? `${pingUser}` : "None",
+        inline: true,
+      },
+      {
+        name: "Reason",
+        value: reason,
+        inline: false,
+      }
+    )
+    .setFooter({
+      text: `Requested by ${interaction.user.tag}`,
+    })
+    .setTimestamp();
+
+  await interaction.reply({
+    content: pingContent,
+    embeds: [embed],
+    allowedMentions: pingUser
+      ? {
+          users: [pingUser.id],
+        }
+      : {
+          users: [],
+        },
+  });
+
+  console.log(
+    `[LOA] Added LOA role to ${interaction.user.tag} | Type: ${loaType} | Expected End: ${expectedEnd} | Pinged: ${
+      pingUser ? pingUser.tag : "None"
+    } | Reason: ${reason}`
+  );
+  return;
+}
 
     if (interaction.commandName === "runbat") {
 if (!allowedUsers.includes(interaction.user.id)) {
