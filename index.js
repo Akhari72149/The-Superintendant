@@ -694,7 +694,7 @@ client.on("interactionCreate", async (interaction) => {
 
         console.log(
           `[LOA] Removed LOA role from ${interaction.user.tag} | Type: ${loaType} | Expected End: ${expectedEnd} | Pinged: ${
-            pingUser ? pingUser.tag : "None"
+            pings || "None"
           } | Reason: ${reason}`,
         );
         return;
@@ -750,7 +750,7 @@ client.on("interactionCreate", async (interaction) => {
 
       console.log(
         `[LOA] Added LOA role to ${interaction.user.tag} | Type: ${loaType} | Expected End: ${expectedEnd} | Pinged: ${
-          pingUser ? pingUser.tag : "None"
+          pings || "None"
         } | Reason: ${reason}`,
       );
       return;
