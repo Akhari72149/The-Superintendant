@@ -9,8 +9,6 @@ const {
   EmbedBuilder,
 } = require("discord.js");
 
-
-
 const { exec } = require("child_process");
 const express = require("express");
 const { createClient } = require("@supabase/supabase-js");
