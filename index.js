@@ -38,6 +38,7 @@ const requestTagsChannelId = "491197868560875530";
 const loaChannelId = "448367192040407052";
 const modteamTagChannelId = "635676190618681374";
 const batAuditChannelId = "1300274704241922058";
+const adminOpenChannelId = "719715342884143204";
 
 const factionRoles = {
   "212th": "212th Attack Battalion",
@@ -1024,6 +1025,37 @@ client.on("messageCreate", async (msg) => {
     try {
       await msg.react("❌");
     } catch {}
+  }
+});
+
+client.on("guildMemberRemove", async (member) => {
+  try {
+    const adminOpenChannel =
+      member.guild.channels.cache.get(adminOpenChannelId) ||
+      (await member.guild.channels.fetch(adminOpenChannelId).catch(() => null));
+
+    if (!adminOpenChannel?.isTextBased()) {
+      console.warn(
+        `[MEMBER LEFT] Administration channel not found in ${member.guild.name}`,
+      );
+      return;
+    }
+
+    const displayName =
+      member.nickname ||
+      member.user.globalName ||
+      member.user.username ||
+      `User ID ${member.id}`;
+
+    await adminOpenChannel.send(
+      `${displayName} has left the server.\nYou are the weakest link, goodbye`,
+    );
+
+    console.log(
+      `[MEMBER LEFT] ${displayName} (${member.id}) left ${member.guild.name}`,
+    );
+  } catch (error) {
+    console.error("Error sending leave message:", error);
   }
 });
 
