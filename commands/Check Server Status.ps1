@@ -1,5 +1,5 @@
 $server = "arma.101stdoombattalion.com"
-$port = 2301
+$port = 2302
 $timeoutMilliseconds = 5000
 
 $udp = $null
