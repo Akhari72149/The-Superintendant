@@ -16,7 +16,8 @@ const { createClient } = require("@supabase/supabase-js");
 const app = express();
 app.use(express.json());
 
-const serverStatusBatch = `"C:\\discord-bot\\commands\\Check Server Status.bat"`;
+const serverStatusBatch =
+  '"C:\\Apps\\The-Superintendant\\commands\\Check Server Status.bat"';
 
 const clientId = process.env.CLIENT_ID;
 const guildId = process.env.GUILD_ID;
