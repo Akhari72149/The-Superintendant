@@ -999,23 +999,107 @@ client.on("messageCreate", async (msg) => {
 
       if (!allowedChannels.includes(channelName)) return;
 
-      await msg.channel.send("Checking server status...");
+      const checkingMessage = await msg.channel.send(
+        "🔄 Checking server status...",
+      );
 
       exec(serverStatusBatch, async (error, stdout, stderr) => {
-        if (error) {
+        try {
+          if (error && !stdout?.trim()) {
+            console.error(
+              `Error executing Server Status command: ${
+                stderr || error.message
+              }`,
+            );
+
+            await checkingMessage.edit(
+              "❌ Failed to check server status.",
+            );
+
+            return;
+          }
+
+          const resultLines = stdout
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter((line) => line.startsWith("RESULT|"));
+
+          if (resultLines.length === 0) {
+            console.error("No readable server results returned:", {
+              stdout,
+              stderr,
+            });
+
+            await checkingMessage.edit(
+              "⚠️ No server status results were returned.",
+            );
+
+            return;
+          }
+
+          const servers = resultLines.map((line) => {
+            const [, name, status, port] = line.split("|");
+
+            return {
+              name,
+              status,
+              port,
+            };
+          });
+
+          const onlineCount = servers.filter(
+            (server) => server.status === "ONLINE",
+          ).length;
+
+          const description = servers
+            .map((server) => {
+              const icon =
+                server.status === "ONLINE" ? "🟢" : "🔴";
+
+              return [
+                `${icon} **${server.name}**`,
+                `Status: **${server.status}**`,
+                `Game Port: \`${server.port}\``,
+              ].join("\n");
+            })
+            .join("\n\n");
+
+          const embed = {
+            color:
+              onlineCount === servers.length
+                ? 0x57f287
+                : onlineCount === 0
+                  ? 0xed4245
+                  : 0xfee75c,
+            title: "Arma 3 Server Status",
+            description,
+            fields: [
+              {
+                name: "Summary",
+                value: `${onlineCount}/${servers.length} servers online`,
+                inline: false,
+              },
+            ],
+            footer: {
+              text: "101st Doom Battalion",
+            },
+            timestamp: new Date().toISOString(),
+          };
+
+          await checkingMessage.edit({
+            content: "",
+            embeds: [embed],
+          });
+        } catch (callbackError) {
           console.error(
-            `Error executing Server Status command: ${stderr || error.message}`,
+            "Error handling Server Status output:",
+            callbackError,
           );
 
-          await msg.channel.send("Failed to check server status.");
-          return;
+          await checkingMessage.edit(
+            "❌ The status check completed, but the result could not be displayed.",
+          );
         }
-
-        const output = stdout?.trim() || "No status output returned.";
-
-        await msg.channel.send({
-          content: `**Server Status:**\n\`\`\`\n${output.slice(0, 1900)}\n\`\`\``,
-        });
       });
 
       return;
