@@ -25,6 +25,32 @@ const modteamGuildId = process.env.MODTEAM_GUILD_ID;
 
 const websiteSecret = process.env.WEBSITE_BOT_SECRET;
 const websiteActionPort = Number(process.env.WEBSITE_ACTION_PORT || 3020);
+const remoteAgentBaseUrl = process.env.REMOTE_AGENT_BASE_URL;
+const remoteAgentSecret = process.env.REMOTE_AGENT_SECRET;
+
+const remoteServers = Object.freeze({
+  server1: {
+    label: "Server 1",
+    port: 2100,
+  },
+
+  server2: {
+    label: "Server 2",
+    port: 2200,
+  },
+
+  server3: {
+    label: "Server 3",
+    port: 2300,
+  },
+});
+
+const remoteServerChoices = Object.entries(remoteServers).map(
+  ([value, server]) => ({
+    name: `${server.label} — Port ${server.port}`,
+    value,
+  }),
+);
 const websiteAuditChannelId = "719715342884143204";
 
 const supabaseUrl = process.env.SUPABASE_URL;
@@ -38,7 +64,7 @@ const supabase =
 const requestTagsChannelId = "491197868560875530";
 const loaChannelId = "448367192040407052";
 const modteamTagChannelId = "635676190618681374";
-const batAuditChannelId = "1300274704241922058";
+const serverAuditChannelId = "1300274704241922058";
 const adminOpenChannelId = "719715342884143204";
 
 const factionRoles = {
@@ -85,11 +111,6 @@ const allowedUsers = [
   "364551483263418368",
   "561023307147640835",
 ];
-
-const allowedBatCommands = {
-  backup:
-    "C:\\Users\\Administrator\\Desktop\\Bat Command Shortcuts\\backup-auto.bat",
-};
 
 const client = new Client({
   intents: [
@@ -393,14 +414,19 @@ const mainGuildCommands = [
     ),
 
   new SlashCommandBuilder()
-    .setName("runbat")
-    .setDescription("Run an approved server batch command")
-    .addStringOption((option) =>
-      option
-        .setName("command")
-        .setDescription("Batch command to run")
-        .setRequired(true)
-        .addChoices({ name: "Backup Auto", value: "backup" }),
+    .setName("server")
+    .setDescription("Control an Arma server")
+    .addSubcommand((subcommand) =>
+      subcommand
+        .setName("start")
+        .setDescription("Start an Arma server")
+        .addStringOption((option) =>
+          option
+            .setName("server")
+            .setDescription("Select the Arma server to start")
+            .setRequired(true)
+            .addChoices(...remoteServerChoices),
+        ),
     ),
 ].map((command) => command.toJSON());
 
@@ -422,6 +448,73 @@ const modteamCommands = [
         ),
     ),
 ].map((command) => command.toJSON());
+
+async function startRemoteServer(serverKey, requestedBy) {
+  if (!remoteAgentBaseUrl) {
+    throw new Error("REMOTE_AGENT_BASE_URL is missing from the bot .env");
+  }
+
+  if (!remoteAgentSecret) {
+    throw new Error("REMOTE_AGENT_SECRET is missing from the bot .env");
+  }
+
+  const controller = new AbortController();
+
+  const timeout = setTimeout(() => {
+    controller.abort();
+  }, 60_000);
+
+  try {
+    const baseUrl = remoteAgentBaseUrl.replace(/\/+$/, "");
+
+    const response = await fetch(`${baseUrl}/server/start`, {
+      method: "POST",
+
+      headers: {
+        Authorization: `Bearer ${remoteAgentSecret}`,
+        "Content-Type": "application/json",
+      },
+
+      body: JSON.stringify({
+        server: serverKey,
+        requestedBy,
+      }),
+
+      signal: controller.signal,
+    });
+
+    const responseText = await response.text();
+
+    let result = {};
+
+    try {
+      result = responseText ? JSON.parse(responseText) : {};
+    } catch {
+      result = {
+        error:
+          responseText || "The remote Arma agent returned an invalid response",
+      };
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        result.error || `Remote agent returned HTTP ${response.status}`,
+      );
+    }
+
+    return result;
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw new Error(
+        "The remote Arma server did not respond within 60 seconds",
+      );
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 client.once("ready", async () => {
   console.log(`Logged in as ${client.user.tag}`);
@@ -758,105 +851,357 @@ client.on("interactionCreate", async (interaction) => {
       return;
     }
 
-    if (interaction.commandName === "runbat") {
-      if (!allowedUsers.includes(interaction.user.id)) {
-        console.warn(
-          `[UNAUTHORISED BAT ACCESS] ${interaction.user.tag} (${interaction.user.id}) attempted to run /runbat`,
-        );
+    if (interaction.commandName === "server") {
+  if (interaction.guildId !== guildId) {
+    await interaction.reply({
+      content: "❌ This command can only be used in the main server.",
+      ephemeral: true,
+    });
 
-        try {
-          const auditChannel = await client.channels.fetch(batAuditChannelId);
+    return;
+  }
 
-          if (auditChannel) {
-            const embed = new EmbedBuilder()
-              .setColor(0xff0000)
-              .setTitle("🚨 Unauthorized /runbat Attempt")
-              .addFields(
-                {
-                  name: "User",
-                  value: `${interaction.user.tag}`,
-                  inline: true,
-                },
-                {
-                  name: "User ID",
-                  value: interaction.user.id,
-                  inline: true,
-                },
-                {
-                  name: "Server",
-                  value: interaction.guild?.name || "Unknown",
-                  inline: false,
-                },
-                {
-                  name: "Channel",
-                  value: `<#${interaction.channelId}>`,
-                  inline: false,
-                },
-              )
-              .setTimestamp();
+  if (!allowedUsers.includes(interaction.user.id)) {
+    console.warn(
+      `[UNAUTHORISED SERVER ACCESS] ${interaction.user.tag} ` +
+        `(${interaction.user.id}) attempted to use /server`,
+    );
 
-            await auditChannel.send({
-              embeds: [embed],
-            });
-          }
-        } catch (logError) {
-          console.error("Failed to send unauthorized BAT audit log:", logError);
-        }
-
-        await interaction.reply({
-          content: "❌ You are not allowed to run this command.",
-          ephemeral: true,
-        });
-
-        return;
-      }
-
-      const command = interaction.options.getString("command", true);
-      const batPath = allowedBatCommands[command];
-
-      if (!batPath) {
-        await interaction.reply({
-          content: "❌ Invalid batch command.",
-          ephemeral: true,
-        });
-        return;
-      }
-
-      await interaction.reply({
-        content: `⚙️ Running batch command: **${command}**`,
-        ephemeral: true,
-      });
-
-      exec(
-        `"${batPath}"`,
-        { windowsHide: true },
-        async (error, stdout, stderr) => {
-          if (error) {
-            console.error(`[BAT ERROR] ${command}`, error);
-
-            await interaction.followUp({
-              content: `❌ Batch command failed:\n\`\`\`${String(
-                stderr || error.message,
-              ).slice(0, 1800)}\`\`\``,
-              ephemeral: true,
-            });
-
-            return;
-          }
-
-          console.log(`[BAT SUCCESS] ${command}`);
-          if (stdout) console.log(stdout);
-          if (stderr) console.error(stderr);
-
-          await interaction.followUp({
-            content: `✅ Batch command completed successfully: **${command}**`,
-            ephemeral: true,
-          });
-        },
+    try {
+      const auditChannel = await client.channels.fetch(
+        serverAuditChannelId,
       );
 
-      return;
+      if (auditChannel?.isTextBased()) {
+        const unauthorizedEmbed = new EmbedBuilder()
+          .setColor(0xed4245)
+          .setTitle("🚨 Unauthorized Server Control Attempt")
+          .addFields(
+            {
+              name: "User",
+              value: `${interaction.user}`,
+              inline: true,
+            },
+            {
+              name: "User ID",
+              value: interaction.user.id,
+              inline: true,
+            },
+            {
+              name: "Discord Server",
+              value: interaction.guild?.name || "Unknown",
+              inline: false,
+            },
+            {
+              name: "Channel",
+              value: `<#${interaction.channelId}>`,
+              inline: false,
+            },
+          )
+          .setFooter({
+            text: "Remote Arma server control",
+          })
+          .setTimestamp();
+
+        await auditChannel.send({
+          embeds: [unauthorizedEmbed],
+        });
+      }
+    } catch (auditError) {
+      console.error(
+        "Failed to record unauthorized server-control attempt:",
+        auditError,
+      );
     }
+
+    await interaction.reply({
+      content: "❌ You are not allowed to control the Arma servers.",
+      ephemeral: true,
+    });
+
+    return;
+  }
+
+  const subcommand = interaction.options.getSubcommand();
+
+  if (subcommand !== "start") {
+    await interaction.reply({
+      content: "❌ Invalid server action.",
+      ephemeral: true,
+    });
+
+    return;
+  }
+
+  const serverKey = interaction.options.getString(
+    "server",
+    true,
+  );
+
+  const selectedServer = remoteServers[serverKey];
+
+  if (!selectedServer) {
+    await interaction.reply({
+      content: "❌ Invalid server selection.",
+      ephemeral: true,
+    });
+
+    return;
+  }
+
+  await interaction.deferReply({
+    ephemeral: true,
+  });
+
+  const startingEmbed = new EmbedBuilder()
+    .setColor(0xfee75c)
+    .setTitle(`🟠 Starting ${selectedServer.label}`)
+    .setDescription(
+      "The start request is being sent to the remote Arma server.",
+    )
+    .addFields(
+      {
+        name: "Server",
+        value: selectedServer.label,
+        inline: true,
+      },
+      {
+        name: "Game Port",
+        value: String(selectedServer.port),
+        inline: true,
+      },
+      {
+        name: "Requested By",
+        value: `${interaction.user}`,
+        inline: true,
+      },
+      {
+        name: "Status",
+        value: "Contacting remote server agent…",
+        inline: false,
+      },
+    )
+    .setFooter({
+      text: "Waiting for the remote server agent",
+    })
+    .setTimestamp();
+
+  await interaction.editReply({
+    embeds: [startingEmbed],
+  });
+
+  try {
+    const result = await startRemoteServer(
+      serverKey,
+      `${interaction.user.tag} (${interaction.user.id})`,
+    );
+
+    const successEmbed = new EmbedBuilder()
+      .setColor(0x57f287)
+      .setTitle(
+        `🟢 ${selectedServer.label} Start Command Successful`,
+      )
+      .setDescription(
+        "The remote Arma machine successfully executed the server batch file.",
+      )
+      .addFields(
+        {
+          name: "Server",
+          value: selectedServer.label,
+          inline: true,
+        },
+        {
+          name: "Game Port",
+          value: String(selectedServer.port),
+          inline: true,
+        },
+        {
+          name: "Requested By",
+          value: `${interaction.user}`,
+          inline: true,
+        },
+        {
+          name: "Remote Result",
+          value:
+            result.message ||
+            "The server batch file executed successfully.",
+          inline: false,
+        },
+      )
+      .setFooter({
+        text: "Use server status to confirm the server is online",
+      })
+      .setTimestamp();
+
+    await interaction.editReply({
+      embeds: [successEmbed],
+    });
+
+    console.log(
+      `[REMOTE SERVER START] ${interaction.user.tag} started ` +
+        `${selectedServer.label} on port ${selectedServer.port}`,
+    );
+
+    try {
+      const auditChannel = await client.channels.fetch(
+        serverAuditChannelId,
+      );
+
+      if (auditChannel?.isTextBased()) {
+        const successAuditEmbed = new EmbedBuilder()
+          .setColor(0x57f287)
+          .setTitle("🟢 Arma Server Start Command Completed")
+          .addFields(
+            {
+              name: "Server",
+              value: selectedServer.label,
+              inline: true,
+            },
+            {
+              name: "Game Port",
+              value: String(selectedServer.port),
+              inline: true,
+            },
+            {
+              name: "Requested By",
+              value: `${interaction.user}`,
+              inline: true,
+            },
+            {
+              name: "User ID",
+              value: interaction.user.id,
+              inline: true,
+            },
+            {
+              name: "Channel",
+              value: `<#${interaction.channelId}>`,
+              inline: true,
+            },
+            {
+              name: "Remote Result",
+              value:
+                result.message ||
+                "The server batch file executed successfully.",
+              inline: false,
+            },
+          )
+          .setFooter({
+            text: "Remote Arma server control",
+          })
+          .setTimestamp();
+
+        await auditChannel.send({
+          embeds: [successAuditEmbed],
+        });
+      }
+    } catch (auditError) {
+      console.error(
+        "Failed to send successful server-start audit:",
+        auditError,
+      );
+    }
+  } catch (error) {
+    console.error(
+      `[REMOTE SERVER START ERROR] ${selectedServer.label}:`,
+      error,
+    );
+
+    const errorMessage = String(
+      error.message || error,
+    ).slice(0, 900);
+
+    const failedEmbed = new EmbedBuilder()
+      .setColor(0xed4245)
+      .setTitle(`🔴 ${selectedServer.label} Failed to Start`)
+      .setDescription(
+        "The remote Arma machine could not execute the server start command.",
+      )
+      .addFields(
+        {
+          name: "Server",
+          value: selectedServer.label,
+          inline: true,
+        },
+        {
+          name: "Game Port",
+          value: String(selectedServer.port),
+          inline: true,
+        },
+        {
+          name: "Requested By",
+          value: `${interaction.user}`,
+          inline: true,
+        },
+        {
+          name: "Error",
+          value: `\`\`\`${errorMessage}\`\`\``,
+          inline: false,
+        },
+      )
+      .setFooter({
+        text: "Check the remote-agent console and server launch log",
+      })
+      .setTimestamp();
+
+    await interaction.editReply({
+      embeds: [failedEmbed],
+    });
+
+    try {
+      const auditChannel = await client.channels.fetch(
+        serverAuditChannelId,
+      );
+
+      if (auditChannel?.isTextBased()) {
+        const failureAuditEmbed = new EmbedBuilder()
+          .setColor(0xed4245)
+          .setTitle("🔴 Arma Server Start Failed")
+          .addFields(
+            {
+              name: "Server",
+              value: selectedServer.label,
+              inline: true,
+            },
+            {
+              name: "Game Port",
+              value: String(selectedServer.port),
+              inline: true,
+            },
+            {
+              name: "Requested By",
+              value: `${interaction.user}`,
+              inline: true,
+            },
+            {
+              name: "User ID",
+              value: interaction.user.id,
+              inline: true,
+            },
+            {
+              name: "Error",
+              value: errorMessage,
+              inline: false,
+            },
+          )
+          .setFooter({
+            text: "Remote Arma server control",
+          })
+          .setTimestamp();
+
+        await auditChannel.send({
+          embeds: [failureAuditEmbed],
+        });
+      }
+    } catch (auditError) {
+      console.error(
+        "Failed to send server-start failure audit:",
+        auditError,
+      );
+    }
+  }
+
+  return;
+}
 
     if (interaction.commandName === "modteam-tag") {
       if (!modteamGuildId || interaction.guildId !== modteamGuildId) {
@@ -1012,9 +1357,7 @@ client.on("messageCreate", async (msg) => {
               }`,
             );
 
-            await checkingMessage.edit(
-              "❌ Failed to check server status.",
-            );
+            await checkingMessage.edit("❌ Failed to check server status.");
 
             return;
           }
@@ -1053,8 +1396,7 @@ client.on("messageCreate", async (msg) => {
 
           const description = servers
             .map((server) => {
-              const icon =
-                server.status === "ONLINE" ? "🟢" : "🔴";
+              const icon = server.status === "ONLINE" ? "🟢" : "🔴";
 
               return [
                 `${icon} **${server.name}**`,
@@ -1091,10 +1433,7 @@ client.on("messageCreate", async (msg) => {
             embeds: [embed],
           });
         } catch (callbackError) {
-          console.error(
-            "Error handling Server Status output:",
-            callbackError,
-          );
+          console.error("Error handling Server Status output:", callbackError);
 
           await checkingMessage.edit(
             "❌ The status check completed, but the result could not be displayed.",
