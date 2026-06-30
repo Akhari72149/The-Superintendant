@@ -64,7 +64,7 @@ const supabase =
 const requestTagsChannelId = "491197868560875530";
 const loaChannelId = "448367192040407052";
 const modteamTagChannelId = "635676190618681374";
-const serverAuditChannelId = "1300274704241922058";
+const serverAuditChannelId = "1142843038725591082";
 const adminOpenChannelId = "719715342884143204";
 
 const factionRoles = {
