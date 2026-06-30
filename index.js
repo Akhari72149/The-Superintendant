@@ -7,6 +7,7 @@ const {
   REST,
   Routes,
   EmbedBuilder,
+  MessageFlags,
 } = require("discord.js");
 
 const { exec } = require("child_process");
@@ -67,6 +68,13 @@ const modteamTagChannelId = "635676190618681374";
 const serverAuditChannelId = "1142843038725591082";
 const adminOpenChannelId = "719715342884143204";
 
+const serverControlChannelId = "1300274704241922058";
+
+const serverControlRoleIds = new Set([
+  "472444743222296586",
+  "1340561384437448828",
+]);
+
 const factionRoles = {
   "212th": "212th Attack Battalion",
   "501st": "501st Legion",
@@ -106,11 +114,6 @@ ${modteamSheetLink}
 const extraRoleName = "GARC Member";
 const roleToRemoveId = "492653693091577856";
 
-const allowedUsers = [
-  "593912175228354600",
-  "364551483263418368",
-  "561023307147640835",
-];
 
 const client = new Client({
   intents: [
@@ -451,35 +454,41 @@ const modteamCommands = [
 
 async function startRemoteServer(serverKey, requestedBy) {
   if (!remoteAgentBaseUrl) {
-    throw new Error("REMOTE_AGENT_BASE_URL is missing from the bot .env");
+    throw new Error(
+      "REMOTE_AGENT_BASE_URL is missing from the bot .env",
+    );
   }
 
   if (!remoteAgentSecret) {
-    throw new Error("REMOTE_AGENT_SECRET is missing from the bot .env");
+    throw new Error(
+      "REMOTE_AGENT_SECRET is missing from the bot .env",
+    );
   }
 
   const controller = new AbortController();
 
+  /*
+   * The remote agent waits for up to 90 seconds for the
+   * correct Arma console window. Give it additional time
+   * for the batch launch and network response.
+   */
   const timeout = setTimeout(() => {
     controller.abort();
-  }, 60_000);
+  }, 120_000);
 
   try {
     const baseUrl = remoteAgentBaseUrl.replace(/\/+$/, "");
 
     const response = await fetch(`${baseUrl}/server/start`, {
       method: "POST",
-
       headers: {
         Authorization: `Bearer ${remoteAgentSecret}`,
         "Content-Type": "application/json",
       },
-
       body: JSON.stringify({
         server: serverKey,
         requestedBy,
       }),
-
       signal: controller.signal,
     });
 
@@ -492,13 +501,15 @@ async function startRemoteServer(serverKey, requestedBy) {
     } catch {
       result = {
         error:
-          responseText || "The remote Arma agent returned an invalid response",
+          responseText ||
+          "The remote Arma agent returned an invalid response",
       };
     }
 
     if (!response.ok) {
       throw new Error(
-        result.error || `Remote agent returned HTTP ${response.status}`,
+        result.error ||
+          `Remote agent returned HTTP ${response.status}`,
       );
     }
 
@@ -506,7 +517,7 @@ async function startRemoteServer(serverKey, requestedBy) {
   } catch (error) {
     if (error.name === "AbortError") {
       throw new Error(
-        "The remote Arma server did not respond within 60 seconds",
+        "The remote Arma server did not respond within 120 seconds",
       );
     }
 
@@ -854,14 +865,40 @@ client.on("interactionCreate", async (interaction) => {
     if (interaction.commandName === "server") {
   if (interaction.guildId !== guildId) {
     await interaction.reply({
-      content: "❌ This command can only be used in the main server.",
-      ephemeral: true,
+      content:
+        "❌ This command can only be used in the main server.",
+      flags: MessageFlags.Ephemeral,
     });
 
     return;
   }
 
-  if (!allowedUsers.includes(interaction.user.id)) {
+  /*
+   * Restrict the command to the server-control channel.
+   */
+  if (interaction.channelId !== serverControlChannelId) {
+    await interaction.reply({
+      content:
+        `❌ Please use \`/server\` in ` +
+        `<#${serverControlChannelId}>.`,
+      flags: MessageFlags.Ephemeral,
+    });
+
+    return;
+  }
+
+  /*
+   * Fetch the current member so their current roles are checked.
+   */
+  const member = await interaction.guild.members.fetch(
+    interaction.user.id,
+  );
+
+  const hasRequiredRole = member.roles.cache.some((role) =>
+    serverControlRoleIds.has(role.id),
+  );
+
+  if (!hasRequiredRole) {
     console.warn(
       `[UNAUTHORISED SERVER ACCESS] ${interaction.user.tag} ` +
         `(${interaction.user.id}) attempted to use /server`,
@@ -888,13 +925,15 @@ client.on("interactionCreate", async (interaction) => {
               inline: true,
             },
             {
-              name: "Discord Server",
-              value: interaction.guild?.name || "Unknown",
-              inline: false,
-            },
-            {
               name: "Channel",
               value: `<#${interaction.channelId}>`,
+              inline: true,
+            },
+            {
+              name: "Required Roles",
+              value:
+                `<@&472444743222296586> or ` +
+                `<@&1340561384437448828>`,
               inline: false,
             },
           )
@@ -905,6 +944,9 @@ client.on("interactionCreate", async (interaction) => {
 
         await auditChannel.send({
           embeds: [unauthorizedEmbed],
+          allowedMentions: {
+            parse: [],
+          },
         });
       }
     } catch (auditError) {
@@ -915,8 +957,9 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     await interaction.reply({
-      content: "❌ You are not allowed to control the Arma servers.",
-      ephemeral: true,
+      content:
+        "❌ You do not have a role permitted to control the Arma servers.",
+      flags: MessageFlags.Ephemeral,
     });
 
     return;
@@ -927,7 +970,7 @@ client.on("interactionCreate", async (interaction) => {
   if (subcommand !== "start") {
     await interaction.reply({
       content: "❌ Invalid server action.",
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
 
     return;
@@ -943,21 +986,21 @@ client.on("interactionCreate", async (interaction) => {
   if (!selectedServer) {
     await interaction.reply({
       content: "❌ Invalid server selection.",
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
 
     return;
   }
 
   await interaction.deferReply({
-    ephemeral: true,
+    flags: MessageFlags.Ephemeral,
   });
 
   const startingEmbed = new EmbedBuilder()
     .setColor(0xfee75c)
     .setTitle(`🟠 Starting ${selectedServer.label}`)
     .setDescription(
-      "The start request is being sent to the remote Arma server.",
+      "The batch file is being executed and the bot is waiting for the matching Arma console window.",
     )
     .addFields(
       {
@@ -976,13 +1019,20 @@ client.on("interactionCreate", async (interaction) => {
         inline: true,
       },
       {
+        name: "Expected Console",
+        value:
+          `\`Arma 3 Console version * x64 : port ` +
+          `${selectedServer.port}\``,
+        inline: false,
+      },
+      {
         name: "Status",
-        value: "Contacting remote server agent…",
+        value: "Waiting for the Arma console…",
         inline: false,
       },
     )
     .setFooter({
-      text: "Waiting for the remote server agent",
+      text: "This can take up to 90 seconds",
     })
     .setTimestamp();
 
@@ -996,13 +1046,17 @@ client.on("interactionCreate", async (interaction) => {
       `${interaction.user.tag} (${interaction.user.id})`,
     );
 
+    const detectedTitle =
+      result.windowTitle ||
+      `Arma console detected on port ${selectedServer.port}`;
+
     const successEmbed = new EmbedBuilder()
       .setColor(0x57f287)
       .setTitle(
-        `🟢 ${selectedServer.label} Start Command Successful`,
+        `🟢 ${selectedServer.label} Started Successfully`,
       )
       .setDescription(
-        "The remote Arma machine successfully executed the server batch file.",
+        "The remote agent detected the matching Arma server console window.",
       )
       .addFields(
         {
@@ -1021,15 +1075,18 @@ client.on("interactionCreate", async (interaction) => {
           inline: true,
         },
         {
-          name: "Remote Result",
-          value:
-            result.message ||
-            "The server batch file executed successfully.",
+          name: "Detected Console",
+          value: `\`${detectedTitle}\``,
+          inline: false,
+        },
+        {
+          name: "Status",
+          value: "Running",
           inline: false,
         },
       )
       .setFooter({
-        text: "Use server status to confirm the server is online",
+        text: "The matching Arma console window was confirmed",
       })
       .setTimestamp();
 
@@ -1050,7 +1107,7 @@ client.on("interactionCreate", async (interaction) => {
       if (auditChannel?.isTextBased()) {
         const successAuditEmbed = new EmbedBuilder()
           .setColor(0x57f287)
-          .setTitle("🟢 Arma Server Start Command Completed")
+          .setTitle("🟢 Arma Server Started")
           .addFields(
             {
               name: "Server",
@@ -1078,10 +1135,8 @@ client.on("interactionCreate", async (interaction) => {
               inline: true,
             },
             {
-              name: "Remote Result",
-              value:
-                result.message ||
-                "The server batch file executed successfully.",
+              name: "Detected Console",
+              value: detectedTitle,
               inline: false,
             },
           )
@@ -1114,7 +1169,7 @@ client.on("interactionCreate", async (interaction) => {
       .setColor(0xed4245)
       .setTitle(`🔴 ${selectedServer.label} Failed to Start`)
       .setDescription(
-        "The remote Arma machine could not execute the server start command.",
+        "The matching Arma console window could not be confirmed.",
       )
       .addFields(
         {
@@ -1139,7 +1194,7 @@ client.on("interactionCreate", async (interaction) => {
         },
       )
       .setFooter({
-        text: "Check the remote-agent console and server launch log",
+        text: "Check the Arma server and remote-agent console",
       })
       .setTimestamp();
 
