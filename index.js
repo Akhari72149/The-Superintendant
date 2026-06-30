@@ -13,9 +13,9 @@ const {
 const { exec } = require("child_process");
 const express = require("express");
 const { createClient } = require("@supabase/supabase-js");
+const { registerSteamVerificationRoutes } = require("./steam-verification");
 
 const app = express();
-app.use(express.json());
 
 const serverStatusBatch =
   '"C:\\Apps\\The-Superintendant\\commands\\Check Server Status.bat"';
@@ -25,9 +25,20 @@ const guildId = process.env.GUILD_ID;
 const modteamGuildId = process.env.MODTEAM_GUILD_ID;
 
 const websiteSecret = process.env.WEBSITE_BOT_SECRET;
-const websiteActionPort = Number(process.env.WEBSITE_ACTION_PORT || 3020);
+const websiteActionPort = Number(
+  process.env.WEBSITE_ACTION_PORT ||
+    process.env.STEAM_VERIFICATION_PORT ||
+    3020,
+);
+const websiteActionHost =
+  process.env.WEBSITE_ACTION_HOST ||
+  process.env.STEAM_VERIFICATION_HOST ||
+  "0.0.0.0";
+const steamVerificationPath =
+  process.env.STEAM_VERIFICATION_PATH || "/api/steam-verification";
 const remoteAgentBaseUrl = process.env.REMOTE_AGENT_BASE_URL;
 const remoteAgentSecret = process.env.REMOTE_AGENT_SECRET;
+let websiteActionServer = null;
 
 const remoteServers = Object.freeze({
   server1: {
@@ -124,6 +135,9 @@ const client = new Client({
     GatewayIntentBits.GuildMessageReactions,
   ],
 });
+
+registerSteamVerificationRoutes({ app, client, EmbedBuilder });
+app.use(express.json());
 
 function normaliseDiscordId(value) {
   if (!value) return null;
@@ -530,8 +544,13 @@ async function startRemoteServer(serverKey, requestedBy) {
 client.once("ready", async () => {
   console.log(`Logged in as ${client.user.tag}`);
 
-  app.listen(websiteActionPort, "0.0.0.0", () => {
-    console.log(`Website action listener running on port ${websiteActionPort}`);
+  websiteActionServer = app.listen(websiteActionPort, websiteActionHost, () => {
+    console.log(
+      `Website action listener running on ${websiteActionHost}:${websiteActionPort}`,
+    );
+    console.log(
+      `Steam verification endpoint running on ${websiteActionHost}:${websiteActionPort}${steamVerificationPath}`,
+    );
   });
 
   if (!clientId || !guildId) {
@@ -1538,6 +1557,23 @@ client.on("guildMemberRemove", async (member) => {
   }
 });
 
+function shutdown(signal) {
+  console.log(`[shutdown] Received ${signal}. Closing HTTP listener and Discord client.`);
+
+  if (websiteActionServer) {
+    websiteActionServer.close(() => {
+      client.destroy();
+      process.exit(0);
+    });
+    return;
+  }
+
+  client.destroy();
+  process.exit(0);
+}
+
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("unhandledRejection", console.error);
 process.on("uncaughtException", console.error);
 
