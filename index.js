@@ -8,6 +8,7 @@ const {
   Routes,
   EmbedBuilder,
   MessageFlags,
+  Partials,
 } = require("discord.js");
 
 const { exec } = require("child_process");
@@ -133,6 +134,12 @@ const client = new Client({
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessageReactions,
+  ],
+  partials: [
+    Partials.Message,
+    Partials.Channel,
+    Partials.Reaction,
+    Partials.User,
   ],
 });
 
@@ -541,6 +548,557 @@ async function startRemoteServer(serverKey, requestedBy) {
   }
 }
 
+const attendancePollIntervalMs = Number(
+  process.env.ATTENDANCE_POLL_INTERVAL_MS || 30000,
+);
+let attendancePollTimer = null;
+let attendancePollRunning = false;
+
+const attendanceAssignableRoleIds = new Set([
+  "1165712538047090688",
+  "1165712595412602910",
+  "1165712638764916737",
+  "1165712700186296492",
+]);
+
+function addDays(dateValue, days) {
+  const date = new Date(dateValue);
+  date.setDate(date.getDate() + days);
+  return date.toISOString();
+}
+
+function getAttendanceEmojiKey(value) {
+  const raw = String(value || "").trim();
+  const customMatch = raw.match(/^<a?:\w+:(\d+)>$/);
+  return customMatch ? customMatch[1] : raw;
+}
+
+function getReactionEmojiKey(reaction) {
+  return reaction.emoji.id || reaction.emoji.name;
+}
+
+function optionMatchesReaction(option, reaction) {
+  return getAttendanceEmojiKey(option.emoji) === getReactionEmojiKey(reaction);
+}
+
+function formatDiscordTimestamp(isoValue, style = "F") {
+  const seconds = Math.floor(new Date(isoValue).getTime() / 1000);
+  return Number.isFinite(seconds) ? `<t:${seconds}:${style}>` : "Unknown";
+}
+
+function formatDuration(minutes) {
+  const total = Number(minutes || 0);
+  if (!Number.isFinite(total) || total <= 0) return "Unknown";
+  if (total % 60 === 0) return `${total / 60} hour${total === 60 ? "" : "s"}`;
+  return `${total} minutes`;
+}
+
+function sanitizeAttendanceName(value) {
+  return String(value || "")
+    .replace(/\*/g, "\\*")
+    .replace(/_/g, "\\_")
+    .slice(0, 90);
+}
+
+function cleanRoleId(value) {
+  const roleId = String(value || "").trim().replace(/[<@&>]/g, "");
+  return /^\d{16,22}$/.test(roleId) ? roleId : "";
+}
+
+function cleanAttendanceAssignableRoleId(value) {
+  const roleId = cleanRoleId(value);
+  return attendanceAssignableRoleIds.has(roleId) ? roleId : "";
+}
+
+function buildRolePingContent(roleId, trailingMessage = "") {
+  const cleanId = cleanRoleId(roleId);
+  const message = String(trailingMessage || "").trim();
+
+  if (cleanId && message) return `<@&${cleanId}> ${message}`;
+  if (cleanId) return `<@&${cleanId}>`;
+  return message;
+}
+
+function buildAllowedRoleMentions(...roleIds) {
+  const roles = roleIds.map(cleanRoleId).filter(Boolean);
+  return roles.length ? { roles } : { parse: [] };
+}
+
+async function getAttendanceEventBundle(eventId) {
+  const { data: event, error: eventError } = await supabase
+    .from("discord_attendance_events")
+    .select("*")
+    .eq("id", eventId)
+    .maybeSingle();
+
+  if (eventError || !event) {
+    throw eventError || new Error("Attendance event not found");
+  }
+
+  const [
+    { data: options, error: optionsError },
+    { data: responses, error: responsesError },
+  ] = await Promise.all([
+    supabase
+      .from("discord_attendance_options")
+      .select("*")
+      .eq("event_id", eventId)
+      .order("sort_order", { ascending: true }),
+    supabase
+      .from("discord_attendance_responses")
+      .select("*")
+      .eq("event_id", eventId)
+      .order("created_at", { ascending: true }),
+  ]);
+
+  if (optionsError) throw optionsError;
+  if (responsesError) throw responsesError;
+
+  return {
+    event,
+    options: options || [],
+    responses: responses || [],
+  };
+}
+
+function buildAttendanceEmbed(event, options, responses) {
+  const embed = new EmbedBuilder()
+    .setTitle(`📅 ${event.title}`)
+    .setColor(0x00ff66)
+    .addFields(
+      {
+        name: "Time",
+        value: `${formatDiscordTimestamp(
+          event.event_starts_at,
+          "F",
+        )} (${formatDiscordTimestamp(event.event_starts_at, "R")})`,
+        inline: false,
+      },
+      {
+        name: "Duration",
+        value: formatDuration(event.duration_minutes),
+        inline: false,
+      },
+    );
+
+  if (event.description) {
+    embed.setDescription(event.description);
+  }
+
+  if (event.repeat_enabled) {
+    embed.addFields({
+      name: "Repeat",
+      value: `Every week (${event.repeat_timezone || "Europe/London"})`,
+      inline: false,
+    });
+  }
+
+  const responsesByOption = new Map();
+  for (const option of options) {
+    responsesByOption.set(option.id, []);
+  }
+
+  for (const response of responses) {
+    const list = responsesByOption.get(response.option_id);
+    if (list) list.push(response);
+  }
+
+  for (const option of options) {
+    const optionResponses = responsesByOption.get(option.id) || [];
+    const value = optionResponses.length
+      ? optionResponses
+          .map((response) => `<@${response.discord_user_id}>`)
+          .join("\n")
+          .slice(0, 1024)
+      : "-";
+
+    embed.addFields({
+      name: `${option.emoji} ${option.label} (${optionResponses.length})`,
+      value,
+      inline: true,
+    });
+  }
+
+  embed.setFooter({
+    text:
+      event.footer_text ||
+      `Created by ${event.created_by_name || "101st Command"}`,
+  });
+
+  return embed;
+}
+
+async function renderAttendanceMessage(eventId) {
+  if (!supabase) return;
+
+  const { event, options, responses } = await getAttendanceEventBundle(eventId);
+  if (!event.discord_message_id) return;
+
+  const channel = await client.channels.fetch(event.channel_id).catch(() => null);
+  if (!channel?.isTextBased()) return;
+
+  const message = await channel.messages
+    .fetch(event.discord_message_id)
+    .catch(() => null);
+  if (!message) return;
+
+  await message.edit({
+    embeds: [buildAttendanceEmbed(event, options, responses)],
+  });
+}
+
+async function createNextAttendanceEvent(event, options) {
+  if (!event.repeat_enabled || event.repeat_type !== "weekly") return;
+
+  const { data: nextEvent, error } = await supabase
+    .from("discord_attendance_events")
+    .insert({
+      title: event.title,
+      description: event.description,
+      channel_id: event.channel_id,
+      channel_name: event.channel_name,
+      event_starts_at: addDays(event.event_starts_at, 7),
+      duration_minutes: event.duration_minutes,
+      scheduled_send_at: addDays(event.scheduled_send_at, 7),
+      repeat_enabled: true,
+      repeat_type: "weekly",
+      repeat_timezone: event.repeat_timezone || "Europe/London",
+      footer_text: event.footer_text,
+      ping_role_id: event.ping_role_id,
+      reminder_enabled: event.reminder_enabled,
+      reminder_scheduled_at: event.reminder_scheduled_at
+        ? addDays(event.reminder_scheduled_at, 7)
+        : null,
+      reminder_message: event.reminder_message,
+      reminder_role_id: event.reminder_role_id,
+      created_by: event.created_by,
+      created_by_name: event.created_by_name,
+      status: "scheduled",
+    })
+    .select("id")
+    .single();
+
+  if (error || !nextEvent) {
+    console.error("[attendance] Failed to create next weekly event:", error);
+    return;
+  }
+
+  const nextOptions = options.map((option) => ({
+    event_id: nextEvent.id,
+    label: option.label,
+    emoji: option.emoji,
+    assign_role_id: option.assign_role_id,
+    sort_order: option.sort_order,
+  }));
+
+  const { error: optionError } = await supabase
+    .from("discord_attendance_options")
+    .insert(nextOptions);
+
+  if (optionError) {
+    console.error("[attendance] Failed to copy next weekly options:", optionError);
+  }
+}
+
+async function sendAttendanceEvent(eventId) {
+  const { event, options, responses } = await getAttendanceEventBundle(eventId);
+
+  const channel = await client.channels.fetch(event.channel_id).catch(() => null);
+  if (!channel?.isTextBased()) {
+    throw new Error(`Attendance channel not found: ${event.channel_id}`);
+  }
+
+  const message = await channel.send({
+    content: buildRolePingContent(event.ping_role_id),
+    allowedMentions: buildAllowedRoleMentions(event.ping_role_id),
+    embeds: [buildAttendanceEmbed(event, options, responses)],
+  });
+
+  for (const option of options) {
+    await message.react(option.emoji).catch((error) => {
+      console.error("[attendance] Failed to add reaction:", option.emoji, error);
+    });
+  }
+
+  await supabase
+    .from("discord_attendance_events")
+    .update({
+      discord_message_id: message.id,
+      last_sent_at: new Date().toISOString(),
+      status: "sent",
+      failure_reason: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", event.id);
+
+  await createNextAttendanceEvent(event, options);
+}
+
+async function processDueAttendanceReminders() {
+  if (!supabase) return;
+
+  const { data: dueReminders, error } = await supabase
+    .from("discord_attendance_events")
+    .select("*")
+    .eq("status", "sent")
+    .eq("reminder_enabled", true)
+    .is("reminder_sent_at", null)
+    .lte("reminder_scheduled_at", new Date().toISOString())
+    .limit(10);
+
+  if (error) {
+    console.error("[attendance] Reminder poll failed:", error);
+    return;
+  }
+
+  for (const event of dueReminders || []) {
+    try {
+      const channel = await client.channels.fetch(event.channel_id).catch(() => null);
+      if (!channel?.isTextBased()) {
+        throw new Error(`Reminder channel not found: ${event.channel_id}`);
+      }
+
+      const jumpLink =
+        event.discord_message_id && guildId
+          ? `https://discord.com/channels/${guildId}/${event.channel_id}/${event.discord_message_id}`
+          : "";
+      const reminderText = [event.reminder_message, jumpLink].filter(Boolean).join("\n");
+
+      await channel.send({
+        content: buildRolePingContent(event.reminder_role_id, reminderText),
+        allowedMentions: buildAllowedRoleMentions(event.reminder_role_id),
+      });
+
+      await supabase
+        .from("discord_attendance_events")
+        .update({
+          reminder_sent_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", event.id);
+    } catch (error) {
+      console.error("[attendance] Failed to send reminder:", event.id, error);
+    }
+  }
+}
+
+async function processDueAttendanceEvents() {
+  if (!supabase || attendancePollRunning) return;
+
+  attendancePollRunning = true;
+
+  try {
+    const { data: dueEvents, error } = await supabase
+      .from("discord_attendance_events")
+      .select("id")
+      .eq("status", "scheduled")
+      .lte("scheduled_send_at", new Date().toISOString())
+      .order("scheduled_send_at", { ascending: true })
+      .limit(10);
+
+    if (error) throw error;
+
+    for (const event of dueEvents || []) {
+      try {
+        await sendAttendanceEvent(event.id);
+        console.log("[attendance] Sent attendance event:", event.id);
+      } catch (error) {
+        console.error("[attendance] Failed to send event:", event.id, error);
+        await supabase
+          .from("discord_attendance_events")
+          .update({
+            status: "failed",
+            failure_reason: error.message || "Failed to send attendance event",
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", event.id);
+      }
+    }
+
+    await processDueAttendanceReminders();
+    await cleanupEndedAttendanceEventRoles();
+  } catch (error) {
+    console.error("[attendance] Poll failed:", error);
+  } finally {
+    attendancePollRunning = false;
+  }
+}
+
+async function findAttendanceEventByMessage(messageId) {
+  const { data, error } = await supabase
+    .from("discord_attendance_events")
+    .select("id,status")
+    .eq("discord_message_id", messageId)
+    .in("status", ["sent"])
+    .maybeSingle();
+
+  if (error) {
+    console.error("[attendance] Failed to find event by message:", error);
+    return null;
+  }
+
+  return data;
+}
+
+async function getAttendanceOptionForReaction(eventId, reaction) {
+  const { data: options, error } = await supabase
+    .from("discord_attendance_options")
+    .select("*")
+    .eq("event_id", eventId)
+    .order("sort_order", { ascending: true });
+
+  if (error) {
+    console.error("[attendance] Failed to fetch options:", error);
+    return null;
+  }
+
+  return (
+    (options || []).find((option) => optionMatchesReaction(option, reaction)) ||
+    null
+  );
+}
+
+async function removeOtherAttendanceReactions(reaction, user, selectedOption) {
+  const message = reaction.message;
+
+  for (const existingReaction of message.reactions.cache.values()) {
+    if (existingReaction === reaction) continue;
+    if (optionMatchesReaction(selectedOption, existingReaction)) continue;
+
+    await existingReaction.users.remove(user.id).catch(() => null);
+  }
+}
+
+async function removeAttendanceRolesFromMember(member, exceptRoleId = "") {
+  if (!member) return;
+
+  const rolesToRemove = member.roles.cache.filter(
+    (role) =>
+      attendanceAssignableRoleIds.has(role.id) &&
+      (!exceptRoleId || role.id !== exceptRoleId),
+  );
+
+  if (rolesToRemove.size > 0) {
+    await member.roles.remove(rolesToRemove).catch((error) => {
+      console.error("[attendance] Failed to remove old attendance roles:", error);
+    });
+  }
+}
+
+async function applyAttendanceOptionRole(reaction, user, option) {
+  const roleId = cleanAttendanceAssignableRoleId(option.assign_role_id);
+  const guild = reaction.message.guild;
+
+  if (!guild) return;
+
+  const member = await guild.members.fetch(user.id).catch(() => null);
+  if (!member) return;
+
+  await removeAttendanceRolesFromMember(member, roleId);
+
+  if (roleId && !member.roles.cache.has(roleId)) {
+    await member.roles.add(roleId).catch((error) => {
+      console.error("[attendance] Failed to add attendance role:", roleId, error);
+    });
+  }
+}
+
+async function upsertAttendanceResponse(eventId, option, reaction, user) {
+  const member = reaction.message.guild
+    ? await reaction.message.guild.members.fetch(user.id).catch(() => null)
+    : null;
+
+  const displayName = sanitizeAttendanceName(
+    member?.displayName || user.username || user.id,
+  );
+  const normalisedId = normaliseDiscordId(user.id);
+  let personnelId = null;
+
+  if (normalisedId) {
+    const { data: person } = await supabase
+      .from("personnel")
+      .select("id")
+      .eq("discord_id", normalisedId)
+      .maybeSingle();
+
+    personnelId = person?.id || null;
+  }
+
+  await supabase
+    .from("discord_attendance_responses")
+    .upsert(
+      {
+        event_id: eventId,
+        option_id: option.id,
+        discord_user_id: user.id,
+        discord_display_name: displayName,
+        personnel_id: personnelId,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "event_id,discord_user_id" },
+    );
+}
+
+async function cleanupEndedAttendanceEventRoles() {
+  if (!supabase) return;
+
+  const { data: events, error } = await supabase
+    .from("discord_attendance_events")
+    .select("id,channel_id,event_starts_at,duration_minutes")
+    .eq("status", "sent")
+    .is("roles_removed_at", null)
+    .limit(20);
+
+  if (error) {
+    console.error("[attendance] Role cleanup poll failed:", error);
+    return;
+  }
+
+  const now = Date.now();
+
+  for (const event of events || []) {
+    const endsAt =
+      new Date(event.event_starts_at).getTime() +
+      Number(event.duration_minutes || 0) * 60 * 1000;
+
+    if (!Number.isFinite(endsAt) || endsAt > now) continue;
+
+    try {
+      const { data: responses, error: responseError } = await supabase
+        .from("discord_attendance_responses")
+        .select("discord_user_id")
+        .eq("event_id", event.id);
+
+      if (responseError) throw responseError;
+
+      const channel = await client.channels.fetch(event.channel_id).catch(() => null);
+      const guild = channel?.guild || (guildId ? await client.guilds.fetch(guildId).catch(() => null) : null);
+
+      if (guild) {
+        const uniqueUserIds = [...new Set((responses || []).map((row) => row.discord_user_id))];
+
+        for (const userId of uniqueUserIds) {
+          const member = await guild.members.fetch(userId).catch(() => null);
+          await removeAttendanceRolesFromMember(member);
+        }
+      }
+
+      await supabase
+        .from("discord_attendance_events")
+        .update({
+          roles_removed_at: new Date().toISOString(),
+          status: "closed",
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", event.id);
+
+      console.log("[attendance] Removed attendance roles for ended event:", event.id);
+    } catch (error) {
+      console.error("[attendance] Failed to cleanup event roles:", event.id, error);
+    }
+  }
+}
+
 client.once("ready", async () => {
   console.log(`Logged in as ${client.user.tag}`);
 
@@ -552,6 +1110,21 @@ client.once("ready", async () => {
       `Steam verification endpoint running on ${websiteActionHost}:${websiteActionPort}${steamVerificationPath}`,
     );
   });
+
+  if (supabase) {
+    await processDueAttendanceEvents();
+    attendancePollTimer = setInterval(
+      processDueAttendanceEvents,
+      attendancePollIntervalMs,
+    );
+    console.log(
+      `[attendance] Scheduler running every ${attendancePollIntervalMs}ms`,
+    );
+  } else {
+    console.warn(
+      "[attendance] Supabase client missing; attendance scheduler disabled.",
+    );
+  }
 
   if (!clientId || !guildId) {
     console.error("Missing CLIENT_ID or GUILD_ID in .env");
@@ -1401,6 +1974,74 @@ client.on("interactionCreate", async (interaction) => {
         ephemeral: true,
       });
     }
+  }
+});
+
+client.on("messageReactionAdd", async (reaction, user) => {
+  try {
+    if (!supabase || user.bot) return;
+
+    if (reaction.partial) {
+      reaction = await reaction.fetch();
+    }
+
+    if (reaction.message.partial) {
+      await reaction.message.fetch();
+    }
+
+    const event = await findAttendanceEventByMessage(reaction.message.id);
+    if (!event) return;
+
+    const option = await getAttendanceOptionForReaction(event.id, reaction);
+    if (!option) return;
+
+    await upsertAttendanceResponse(event.id, option, reaction, user);
+    await applyAttendanceOptionRole(reaction, user, option);
+    await removeOtherAttendanceReactions(reaction, user, option);
+    await renderAttendanceMessage(event.id);
+  } catch (error) {
+    console.error("[attendance] Reaction add failed:", error);
+  }
+});
+
+client.on("messageReactionRemove", async (reaction, user) => {
+  try {
+    if (!supabase || user.bot) return;
+
+    if (reaction.partial) {
+      reaction = await reaction.fetch();
+    }
+
+    if (reaction.message.partial) {
+      await reaction.message.fetch();
+    }
+
+    const event = await findAttendanceEventByMessage(reaction.message.id);
+    if (!event) return;
+
+    const option = await getAttendanceOptionForReaction(event.id, reaction);
+    if (!option) return;
+
+    const roleId = cleanAttendanceAssignableRoleId(option.assign_role_id);
+    if (roleId && reaction.message.guild) {
+      const member = await reaction.message.guild.members.fetch(user.id).catch(() => null);
+      if (member?.roles.cache.has(roleId)) {
+        await member.roles.remove(roleId).catch((error) => {
+          console.error("[attendance] Failed to remove reaction role:", roleId, error);
+        });
+      }
+    }
+
+    await supabase
+      .from("discord_attendance_responses")
+      .delete()
+      .eq("event_id", event.id)
+      .eq("option_id", option.id)
+      .eq("discord_user_id", user.id);
+
+    await renderAttendanceMessage(event.id);
+  } catch (error) {
+    console.error("[attendance] Reaction remove failed:", error);
   }
 });
 
