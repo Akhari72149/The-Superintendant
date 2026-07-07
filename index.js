@@ -9,6 +9,9 @@ const {
   EmbedBuilder,
   MessageFlags,
   Partials,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
 } = require("discord.js");
 
 const { exec } = require("child_process");
@@ -592,6 +595,49 @@ function optionMatchesReaction(option, reaction) {
   return getAttendanceEmojiKey(option.emoji) === getReactionEmojiKey(reaction);
 }
 
+function getAttendanceButtonEmoji(value) {
+  const emoji = String(value || "").trim();
+  const customMatch = emoji.match(/^<a?:([^:>]+):(\d+)>$/);
+
+  if (customMatch) {
+    return {
+      name: customMatch[1],
+      id: customMatch[2],
+      animated: emoji.startsWith("<a:"),
+    };
+  }
+
+  return emoji || undefined;
+}
+
+function buildAttendanceComponents(options) {
+  const rows = [];
+  const limitedOptions = (options || []).slice(0, 25);
+
+  for (let index = 0; index < limitedOptions.length; index += 5) {
+    const row = new ActionRowBuilder();
+
+    for (const option of limitedOptions.slice(index, index + 5)) {
+      const button = new ButtonBuilder()
+        .setCustomId(`attendance:${option.event_id}:${option.id}`)
+        .setStyle(ButtonStyle.Secondary);
+      const emoji = getAttendanceButtonEmoji(option.emoji);
+
+      if (emoji) {
+        button.setEmoji(emoji);
+      } else {
+        button.setLabel(option.label || "Select");
+      }
+
+      row.addComponents(button);
+    }
+
+    rows.push(row);
+  }
+
+  return rows;
+}
+
 function formatDiscordTimestamp(isoValue, style = "F") {
   const seconds = Math.floor(new Date(isoValue).getTime() / 1000);
   return Number.isFinite(seconds) ? `<t:${seconds}:${style}>` : "Unknown";
@@ -755,6 +801,7 @@ async function renderAttendanceMessage(eventId) {
 
   await message.edit({
     embeds: [buildAttendanceEmbed(event, options, responses)],
+    components: buildAttendanceComponents(options),
   });
 }
 
@@ -770,13 +817,8 @@ async function sendAttendanceEvent(eventId) {
     content: buildRolePingContent(event.ping_role_id),
     allowedMentions: buildAllowedRoleMentions(event.ping_role_id),
     embeds: [buildAttendanceEmbed(event, options, responses)],
+    components: buildAttendanceComponents(options),
   });
-
-  for (const option of options) {
-    await message.react(option.emoji).catch((error) => {
-      console.error("[attendance] Failed to add reaction:", option.emoji, error);
-    });
-  }
 
   await supabase
     .from("discord_attendance_events")
@@ -914,6 +956,22 @@ async function getAttendanceOptionForReaction(eventId, reaction) {
   );
 }
 
+async function getAttendanceOptionById(eventId, optionId) {
+  const { data: option, error } = await supabase
+    .from("discord_attendance_options")
+    .select("*")
+    .eq("event_id", eventId)
+    .eq("id", optionId)
+    .maybeSingle();
+
+  if (error) {
+    console.error("[attendance] Failed to fetch option by id:", error);
+    return null;
+  }
+
+  return option || null;
+}
+
 async function removeOtherAttendanceReactions(reaction, user, selectedOption) {
   const message = reaction.message;
 
@@ -959,6 +1017,24 @@ async function applyAttendanceOptionRole(reaction, user, option) {
   }
 }
 
+async function applyAttendanceOptionRoleForInteraction(interaction, option) {
+  const roleId = cleanAttendanceAssignableRoleId(option.assign_role_id);
+  const guild = interaction.guild;
+
+  if (!guild) return;
+
+  const member = await guild.members.fetch(interaction.user.id).catch(() => null);
+  if (!member) return;
+
+  await removeAttendanceRolesFromMember(member, roleId);
+
+  if (roleId && !member.roles.cache.has(roleId)) {
+    await member.roles.add(roleId).catch((error) => {
+      console.error("[attendance] Failed to add attendance role:", roleId, error);
+    });
+  }
+}
+
 async function upsertAttendanceResponse(eventId, option, reaction, user) {
   const member = reaction.message.guild
     ? await reaction.message.guild.members.fetch(user.id).catch(() => null)
@@ -987,6 +1063,42 @@ async function upsertAttendanceResponse(eventId, option, reaction, user) {
         event_id: eventId,
         option_id: option.id,
         discord_user_id: user.id,
+        discord_display_name: displayName,
+        personnel_id: personnelId,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "event_id,discord_user_id" },
+    );
+}
+
+async function upsertAttendanceInteractionResponse(eventId, option, interaction) {
+  const member = interaction.guild
+    ? await interaction.guild.members.fetch(interaction.user.id).catch(() => null)
+    : null;
+
+  const displayName = sanitizeAttendanceName(
+    member?.displayName || interaction.user.username || interaction.user.id,
+  );
+  const normalisedId = normaliseDiscordId(interaction.user.id);
+  let personnelId = null;
+
+  if (normalisedId) {
+    const { data: person } = await supabase
+      .from("personnel")
+      .select("id")
+      .eq("discord_id", normalisedId)
+      .maybeSingle();
+
+    personnelId = person?.id || null;
+  }
+
+  await supabase
+    .from("discord_attendance_responses")
+    .upsert(
+      {
+        event_id: eventId,
+        option_id: option.id,
+        discord_user_id: interaction.user.id,
         discord_display_name: displayName,
         personnel_id: personnelId,
         updated_at: new Date().toISOString(),
@@ -1159,9 +1271,47 @@ client.once("ready", async () => {
 });
 
 client.on("interactionCreate", async (interaction) => {
-  if (!interaction.isChatInputCommand()) return;
-
   try {
+    if (interaction.isButton() && interaction.customId.startsWith("attendance:")) {
+      if (!supabase) {
+        await interaction.reply({
+          content: "Attendance tracking is not available right now.",
+          ephemeral: true,
+        });
+        return;
+      }
+
+      await interaction.deferUpdate();
+
+      const [, eventId, optionId] = interaction.customId.split(":");
+      const event = await findAttendanceEventByMessage(interaction.message.id);
+
+      if (!event || event.id !== eventId) {
+        await interaction.followUp({
+          content: "This attendance message is no longer active.",
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const option = await getAttendanceOptionById(eventId, optionId);
+
+      if (!option) {
+        await interaction.followUp({
+          content: "That attendance option is no longer available.",
+          ephemeral: true,
+        });
+        return;
+      }
+
+      await upsertAttendanceInteractionResponse(eventId, option, interaction);
+      await applyAttendanceOptionRoleForInteraction(interaction, option);
+      await renderAttendanceMessage(eventId);
+      return;
+    }
+
+    if (!interaction.isChatInputCommand()) return;
+
     if (!interaction.guild) {
       await interaction.reply({
         content: "❌ This command can only be used inside a server.",
