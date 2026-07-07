@@ -372,6 +372,51 @@ app.post("/website-action", async (req, res) => {
   }
 });
 
+app.post("/attendance/refresh", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+
+    if (!websiteSecret) {
+      return res.status(500).json({
+        error: "WEBSITE_BOT_SECRET is missing from bot .env",
+      });
+    }
+
+    if (authHeader !== `Bearer ${websiteSecret}`) {
+      return res.status(401).json({
+        error: "Unauthorized",
+      });
+    }
+
+    if (!supabase) {
+      return res.status(500).json({
+        error: "Supabase client is not configured",
+      });
+    }
+
+    const eventId = String(req.body?.event_id || req.body?.eventId || "").trim();
+
+    if (!eventId) {
+      return res.status(400).json({
+        error: "Missing attendance event id",
+      });
+    }
+
+    await renderAttendanceMessage(eventId);
+
+    return res.json({
+      success: true,
+      event_id: eventId,
+    });
+  } catch (error) {
+    console.error("[attendance] Website refresh failed:", error);
+
+    return res.status(500).json({
+      error: "Failed to refresh attendance message",
+    });
+  }
+});
+
 const mainGuildCommands = [
   new SlashCommandBuilder()
     .setName("request-tags")
