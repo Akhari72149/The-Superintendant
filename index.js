@@ -554,8 +554,12 @@ async function startRemoteServer(serverKey, requestedBy) {
 const attendancePollIntervalMs = Number(
   process.env.ATTENDANCE_POLL_INTERVAL_MS || 30000,
 );
+const attendancePollBackoffMs = Number(
+  process.env.ATTENDANCE_POLL_BACKOFF_MS || 60000,
+);
 let attendancePollTimer = null;
 let attendancePollRunning = false;
+let attendancePollBackoffUntil = 0;
 
 const attendanceAssignableRoleIds = new Set([
   "1165712538047090688",
@@ -579,6 +583,61 @@ function getNextWeeklyIso(dateValue) {
   }
 
   return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+}
+
+function summariseAttendanceError(error) {
+  const rawMessage = String(error?.message || error || "Unknown error");
+  const titleMatch = rawMessage.match(/<title>(.*?)<\/title>/is);
+  const htmlHeadingMatch = rawMessage.match(/<h1[^>]*>(.*?)<\/h1>/is);
+  const htmlSummary = titleMatch?.[1] || htmlHeadingMatch?.[1] || "";
+  const isHtml = /<!doctype html|<html[\s>]/i.test(rawMessage);
+  const message = isHtml
+    ? `Supabase returned an HTML error page${htmlSummary ? `: ${htmlSummary}` : ""}`
+    : rawMessage;
+
+  return {
+    message: message.replace(/\s+/g, " ").trim().slice(0, 300),
+    code: error?.code,
+    details: error?.details,
+    hint: error?.hint,
+  };
+}
+
+function isTransientAttendanceError(error) {
+  const text = [
+    error?.message,
+    error?.code,
+    error?.details,
+    error?.hint,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  return (
+    text.includes("522") ||
+    text.includes("connection timed out") ||
+    text.includes("fetch failed") ||
+    text.includes("etimedout") ||
+    text.includes("econnreset") ||
+    text.includes("cloudflare") ||
+    text.includes("supabase.co")
+  );
+}
+
+function logAttendancePollFailure(label, error) {
+  const summary = summariseAttendanceError(error);
+  console.error(label, summary);
+
+  if (isTransientAttendanceError(error)) {
+    attendancePollBackoffUntil = Math.max(
+      attendancePollBackoffUntil,
+      Date.now() + attendancePollBackoffMs,
+    );
+    console.warn(
+      `[attendance] Supabase appears temporarily unavailable; backing off polling for ${attendancePollBackoffMs}ms.`,
+    );
+  }
 }
 
 function getAttendanceEmojiKey(value) {
@@ -845,7 +904,7 @@ async function processDueAttendanceReminders() {
     .limit(10);
 
   if (error) {
-    console.error("[attendance] Reminder poll failed:", error);
+    logAttendancePollFailure("[attendance] Reminder poll failed:", error);
     return;
   }
 
@@ -882,6 +941,7 @@ async function processDueAttendanceReminders() {
 
 async function processDueAttendanceEvents() {
   if (!supabase || attendancePollRunning) return;
+  if (Date.now() < attendancePollBackoffUntil) return;
 
   attendancePollRunning = true;
 
@@ -916,7 +976,7 @@ async function processDueAttendanceEvents() {
     await processDueAttendanceReminders();
     await cleanupEndedAttendanceEventRoles();
   } catch (error) {
-    console.error("[attendance] Poll failed:", error);
+    logAttendancePollFailure("[attendance] Poll failed:", error);
   } finally {
     attendancePollRunning = false;
   }
@@ -1118,7 +1178,7 @@ async function cleanupEndedAttendanceEventRoles() {
     .limit(20);
 
   if (error) {
-    console.error("[attendance] Role cleanup poll failed:", error);
+    logAttendancePollFailure("[attendance] Role cleanup poll failed:", error);
     return;
   }
 
