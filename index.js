@@ -567,6 +567,17 @@ function addDays(dateValue, days) {
   return date.toISOString();
 }
 
+function getNextWeeklyIso(dateValue) {
+  let date = new Date(dateValue);
+  const now = Date.now();
+
+  while (Number.isFinite(date.getTime()) && date.getTime() <= now) {
+    date = new Date(addDays(date, 7));
+  }
+
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+}
+
 function getAttendanceEmojiKey(value) {
   const raw = String(value || "").trim();
   const customMatch = raw.match(/^<a?:\w+:(\d+)>$/);
@@ -685,7 +696,7 @@ function buildAttendanceEmbed(event, options, responses) {
     embed.setDescription(event.description);
   }
 
-  if (event.repeat_enabled) {
+  if (event.repeat_enabled || event.repeat_type === "weekly") {
     embed.addFields({
       name: "Repeat",
       value: `Every week (${event.repeat_timezone || "Europe/London"})`,
@@ -747,59 +758,6 @@ async function renderAttendanceMessage(eventId) {
   });
 }
 
-async function createNextAttendanceEvent(event, options) {
-  if (!event.repeat_enabled || event.repeat_type !== "weekly") return;
-
-  const { data: nextEvent, error } = await supabase
-    .from("discord_attendance_events")
-    .insert({
-      title: event.title,
-      description: event.description,
-      channel_id: event.channel_id,
-      channel_name: event.channel_name,
-      event_starts_at: addDays(event.event_starts_at, 7),
-      duration_minutes: event.duration_minutes,
-      scheduled_send_at: addDays(event.scheduled_send_at, 7),
-      repeat_enabled: true,
-      repeat_type: "weekly",
-      repeat_timezone: event.repeat_timezone || "Europe/London",
-      footer_text: event.footer_text,
-      ping_role_id: event.ping_role_id,
-      reminder_enabled: event.reminder_enabled,
-      reminder_scheduled_at: event.reminder_scheduled_at
-        ? addDays(event.reminder_scheduled_at, 7)
-        : null,
-      reminder_message: event.reminder_message,
-      reminder_role_id: event.reminder_role_id,
-      created_by: event.created_by,
-      created_by_name: event.created_by_name,
-      status: "scheduled",
-    })
-    .select("id")
-    .single();
-
-  if (error || !nextEvent) {
-    console.error("[attendance] Failed to create next weekly event:", error);
-    return;
-  }
-
-  const nextOptions = options.map((option) => ({
-    event_id: nextEvent.id,
-    label: option.label,
-    emoji: option.emoji,
-    assign_role_id: option.assign_role_id,
-    sort_order: option.sort_order,
-  }));
-
-  const { error: optionError } = await supabase
-    .from("discord_attendance_options")
-    .insert(nextOptions);
-
-  if (optionError) {
-    console.error("[attendance] Failed to copy next weekly options:", optionError);
-  }
-}
-
 async function sendAttendanceEvent(eventId) {
   const { event, options, responses } = await getAttendanceEventBundle(eventId);
 
@@ -830,8 +788,6 @@ async function sendAttendanceEvent(eventId) {
       updated_at: new Date().toISOString(),
     })
     .eq("id", event.id);
-
-  await createNextAttendanceEvent(event, options);
 }
 
 async function processDueAttendanceReminders() {
@@ -1044,7 +1000,7 @@ async function cleanupEndedAttendanceEventRoles() {
 
   const { data: events, error } = await supabase
     .from("discord_attendance_events")
-    .select("id,channel_id,event_starts_at,duration_minutes")
+    .select("id,channel_id,event_starts_at,duration_minutes,scheduled_send_at,repeat_scheduled_send_at,repeat_enabled,repeat_type,reminder_enabled,reminder_scheduled_at")
     .eq("status", "sent")
     .is("roles_removed_at", null)
     .limit(20);
@@ -1081,6 +1037,45 @@ async function cleanupEndedAttendanceEventRoles() {
           const member = await guild.members.fetch(userId).catch(() => null);
           await removeAttendanceRolesFromMember(member);
         }
+      }
+
+      if (event.repeat_enabled && event.repeat_type === "weekly") {
+        const nextEventStartsAt = getNextWeeklyIso(event.event_starts_at);
+        const nextScheduledSendAt = getNextWeeklyIso(
+          event.repeat_scheduled_send_at || event.scheduled_send_at,
+        );
+        const nextReminderScheduledAt =
+          event.reminder_enabled && event.reminder_scheduled_at
+            ? getNextWeeklyIso(event.reminder_scheduled_at)
+            : null;
+
+        if (!nextEventStartsAt || !nextScheduledSendAt) {
+          throw new Error("Could not calculate next weekly attendance dates");
+        }
+
+        await supabase
+          .from("discord_attendance_responses")
+          .delete()
+          .eq("event_id", event.id);
+
+        await supabase
+          .from("discord_attendance_events")
+          .update({
+            event_starts_at: nextEventStartsAt,
+            scheduled_send_at: nextScheduledSendAt,
+            repeat_scheduled_send_at: nextScheduledSendAt,
+            reminder_scheduled_at: nextReminderScheduledAt,
+            reminder_sent_at: null,
+            roles_removed_at: null,
+            discord_message_id: null,
+            status: "scheduled",
+            failure_reason: null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", event.id);
+
+        console.log("[attendance] Rolled weekly event forward:", event.id);
+        continue;
       }
 
       await supabase
@@ -1996,6 +1991,7 @@ client.on("messageReactionAdd", async (reaction, user) => {
     if (!option) return;
 
     await upsertAttendanceResponse(event.id, option, reaction, user);
+    await renderAttendanceMessage(event.id);
     await applyAttendanceOptionRole(reaction, user, option);
     await removeOtherAttendanceReactions(reaction, user, option);
     await renderAttendanceMessage(event.id);
