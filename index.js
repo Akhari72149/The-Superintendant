@@ -18,6 +18,8 @@ const { exec } = require("child_process");
 const express = require("express");
 const { createClient } = require("@supabase/supabase-js");
 const { registerSteamVerificationRoutes } = require("./steam-verification");
+const { createDiscordOutboxWorker } = require("./discord-outbox-worker");
+const { createAttendanceApiClient } = require("./attendance-api-client");
 
 const app = express();
 
@@ -29,6 +31,15 @@ const guildId = process.env.GUILD_ID;
 const modteamGuildId = process.env.MODTEAM_GUILD_ID;
 
 const websiteSecret = process.env.WEBSITE_BOT_SECRET;
+const discordOutboxUrl = process.env.DISCORD_OUTBOX_URL?.trim();
+const attendanceApiUrl =
+  process.env.ATTENDANCE_API_URL?.trim() ||
+  (discordOutboxUrl
+    ? discordOutboxUrl.replace(/\/discord-outbox\/?$/, "/discord-attendance")
+    : "");
+const discordOutboxPollIntervalMs = Number(
+  process.env.DISCORD_OUTBOX_POLL_INTERVAL_MS || 10000,
+);
 const websiteActionPort = Number(
   process.env.WEBSITE_ACTION_PORT ||
     process.env.STEAM_VERIFICATION_PORT ||
@@ -43,6 +54,7 @@ const steamVerificationPath =
 const remoteAgentBaseUrl = process.env.REMOTE_AGENT_BASE_URL;
 const remoteAgentSecret = process.env.REMOTE_AGENT_SECRET;
 let websiteActionServer = null;
+let discordOutboxWorker = null;
 
 const remoteServers = Object.freeze({
   server1: {
@@ -75,6 +87,11 @@ const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const supabase =
   supabaseUrl && supabaseServiceRoleKey
     ? createClient(supabaseUrl, supabaseServiceRoleKey)
+    : null;
+
+const attendanceApi =
+  attendanceApiUrl && websiteSecret
+    ? createAttendanceApiClient({ endpoint: attendanceApiUrl, secret: websiteSecret })
     : null;
 
 const requestTagsChannelId = "491197868560875530";
@@ -159,8 +176,11 @@ function normaliseDiscordId(value) {
   return cleaned || null;
 }
 
-async function getPersonnelMentionFromSupabase(personnelId, fallbackName) {
+async function getPersonnelMention(personnelId, fallbackName, suppliedDiscordId) {
   console.log("[website-action] Looking up target personnel ID:", personnelId);
+
+  const trustedDiscordId = normaliseDiscordId(suppliedDiscordId);
+  if (trustedDiscordId) return `<@${trustedDiscordId}>`;
 
   if (!supabase) {
     console.log(
@@ -334,9 +354,10 @@ app.post("/website-action", async (req, res) => {
 
     console.log("[website-action] Target personnel ID:", targetPersonnelId);
 
-    const personnelMention = await getPersonnelMentionFromSupabase(
+    const personnelMention = await getPersonnelMention(
       targetPersonnelId,
       payload.personnelName,
+      payload.personnelDiscordId,
     );
 
     console.log("[website-action] Target personnel mention:", personnelMention);
@@ -388,9 +409,9 @@ app.post("/attendance/refresh", async (req, res) => {
       });
     }
 
-    if (!supabase) {
+    if (!attendanceApi && !supabase) {
       return res.status(500).json({
-        error: "Supabase client is not configured",
+        error: "Attendance data source is not configured",
       });
     }
 
@@ -786,6 +807,10 @@ function buildAllowedRoleMentions(...roleIds) {
 }
 
 async function getAttendanceEventBundle(eventId) {
+  if (attendanceApi) {
+    return attendanceApi.bundle(eventId);
+  }
+
   const { data: event, error: eventError } = await supabase
     .from("discord_attendance_events")
     .select("*")
@@ -890,7 +915,7 @@ function buildAttendanceEmbed(event, options, responses) {
 }
 
 async function renderAttendanceMessage(eventId) {
-  if (!supabase) return;
+  if (!attendanceApi && !supabase) return;
 
   const { event, options, responses } = await getAttendanceEventBundle(eventId);
   if (!event.discord_message_id) return;
@@ -924,33 +949,42 @@ async function sendAttendanceEvent(eventId) {
     components: buildAttendanceComponents(options),
   });
 
-  await supabase
-    .from("discord_attendance_events")
-    .update({
-      discord_message_id: message.id,
-      last_sent_at: new Date().toISOString(),
-      status: "sent",
-      failure_reason: null,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", event.id);
+  if (attendanceApi) {
+    await attendanceApi.eventSent(event.id, message.id);
+  } else {
+    await supabase
+      .from("discord_attendance_events")
+      .update({
+        discord_message_id: message.id,
+        last_sent_at: new Date().toISOString(),
+        status: "sent",
+        failure_reason: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", event.id);
+  }
 }
 
 async function processDueAttendanceReminders() {
-  if (!supabase) return;
+  if (!attendanceApi && !supabase) return;
 
-  const { data: dueReminders, error } = await supabase
-    .from("discord_attendance_events")
-    .select("*")
-    .eq("status", "sent")
-    .eq("reminder_enabled", true)
-    .is("reminder_sent_at", null)
-    .lte("reminder_scheduled_at", new Date().toISOString())
-    .limit(10);
-
-  if (error) {
-    logAttendancePollFailure("[attendance] Reminder poll failed:", error);
-    return;
+  let dueReminders;
+  if (attendanceApi) {
+    dueReminders = (await attendanceApi.claimReminders()).reminders || [];
+  } else {
+    const result = await supabase
+      .from("discord_attendance_events")
+      .select("*")
+      .eq("status", "sent")
+      .eq("reminder_enabled", true)
+      .is("reminder_sent_at", null)
+      .lte("reminder_scheduled_at", new Date().toISOString())
+      .limit(10);
+    if (result.error) {
+      logAttendancePollFailure("[attendance] Reminder poll failed:", result.error);
+      return;
+    }
+    dueReminders = result.data || [];
   }
 
   for (const event of dueReminders || []) {
@@ -971,35 +1005,42 @@ async function processDueAttendanceReminders() {
         allowedMentions: buildAllowedRoleMentions(event.reminder_role_id),
       });
 
-      await supabase
-        .from("discord_attendance_events")
-        .update({
-          reminder_sent_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", event.id);
+      if (attendanceApi) {
+        await attendanceApi.reminderSent(event.id);
+      } else {
+        await supabase
+          .from("discord_attendance_events")
+          .update({ reminder_sent_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+          .eq("id", event.id);
+      }
     } catch (error) {
       console.error("[attendance] Failed to send reminder:", event.id, error);
+      if (attendanceApi) await attendanceApi.releaseReminder(event.id).catch(() => null);
     }
   }
 }
 
 async function processDueAttendanceEvents() {
-  if (!supabase || attendancePollRunning) return;
+  if ((!attendanceApi && !supabase) || attendancePollRunning) return;
   if (Date.now() < attendancePollBackoffUntil) return;
 
   attendancePollRunning = true;
 
   try {
-    const { data: dueEvents, error } = await supabase
-      .from("discord_attendance_events")
-      .select("id")
-      .eq("status", "scheduled")
-      .lte("scheduled_send_at", new Date().toISOString())
-      .order("scheduled_send_at", { ascending: true })
-      .limit(10);
-
-    if (error) throw error;
+    let dueEvents;
+    if (attendanceApi) {
+      dueEvents = (await attendanceApi.claimEvents()).events || [];
+    } else {
+      const result = await supabase
+        .from("discord_attendance_events")
+        .select("id")
+        .eq("status", "scheduled")
+        .lte("scheduled_send_at", new Date().toISOString())
+        .order("scheduled_send_at", { ascending: true })
+        .limit(10);
+      if (result.error) throw result.error;
+      dueEvents = result.data || [];
+    }
 
     for (const event of dueEvents || []) {
       try {
@@ -1007,14 +1048,14 @@ async function processDueAttendanceEvents() {
         console.log("[attendance] Sent attendance event:", event.id);
       } catch (error) {
         console.error("[attendance] Failed to send event:", event.id, error);
-        await supabase
-          .from("discord_attendance_events")
-          .update({
-            status: "failed",
-            failure_reason: error.message || "Failed to send attendance event",
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", event.id);
+        if (attendanceApi) {
+          await attendanceApi.eventFailed(event.id, error.message || "Failed to send attendance event").catch(() => null);
+        } else {
+          await supabase
+            .from("discord_attendance_events")
+            .update({ status: "failed", failure_reason: error.message || "Failed to send attendance event", updated_at: new Date().toISOString() })
+            .eq("id", event.id);
+        }
       }
     }
 
@@ -1028,6 +1069,9 @@ async function processDueAttendanceEvents() {
 }
 
 async function findAttendanceEventByMessage(messageId) {
+  if (attendanceApi) {
+    return (await attendanceApi.findMessage(messageId)).event || null;
+  }
   const { data, error } = await supabase
     .from("discord_attendance_events")
     .select("id,status")
@@ -1044,6 +1088,10 @@ async function findAttendanceEventByMessage(messageId) {
 }
 
 async function getAttendanceOptionForReaction(eventId, reaction) {
+  if (attendanceApi) {
+    const { options } = await attendanceApi.bundle(eventId);
+    return (options || []).find((option) => optionMatchesReaction(option, reaction)) || null;
+  }
   const { data: options, error } = await supabase
     .from("discord_attendance_options")
     .select("*")
@@ -1062,6 +1110,9 @@ async function getAttendanceOptionForReaction(eventId, reaction) {
 }
 
 async function getAttendanceOptionById(eventId, optionId) {
+  if (attendanceApi) {
+    return (await attendanceApi.option(eventId, optionId)).option || null;
+  }
   const { data: option, error } = await supabase
     .from("discord_attendance_options")
     .select("*")
@@ -1151,7 +1202,9 @@ async function upsertAttendanceResponse(eventId, option, reaction, user) {
   const normalisedId = normaliseDiscordId(user.id);
   let personnelId = null;
 
-  if (normalisedId) {
+  if (attendanceApi && normalisedId) {
+    personnelId = (await attendanceApi.personnel(normalisedId)).personnelId || null;
+  } else if (normalisedId) {
     const { data: person } = await supabase
       .from("personnel")
       .select("id")
@@ -1161,19 +1214,25 @@ async function upsertAttendanceResponse(eventId, option, reaction, user) {
     personnelId = person?.id || null;
   }
 
-  await supabase
-    .from("discord_attendance_responses")
-    .upsert(
-      {
+  const responsePayload = {
         event_id: eventId,
         option_id: option.id,
         discord_user_id: user.id,
         discord_display_name: displayName,
         personnel_id: personnelId,
         updated_at: new Date().toISOString(),
-      },
-      { onConflict: "event_id,discord_user_id" },
-    );
+      };
+  if (attendanceApi) {
+    await attendanceApi.upsertResponse({
+      eventId,
+      optionId: option.id,
+      discordUserId: user.id,
+      displayName,
+      personnelId,
+    });
+  } else {
+    await supabase.from("discord_attendance_responses").upsert(responsePayload, { onConflict: "event_id,discord_user_id" });
+  }
 }
 
 async function upsertAttendanceInteractionResponse(eventId, option, interaction) {
@@ -1187,7 +1246,9 @@ async function upsertAttendanceInteractionResponse(eventId, option, interaction)
   const normalisedId = normaliseDiscordId(interaction.user.id);
   let personnelId = null;
 
-  if (normalisedId) {
+  if (attendanceApi && normalisedId) {
+    personnelId = (await attendanceApi.personnel(normalisedId)).personnelId || null;
+  } else if (normalisedId) {
     const { data: person } = await supabase
       .from("personnel")
       .select("id")
@@ -1197,34 +1258,45 @@ async function upsertAttendanceInteractionResponse(eventId, option, interaction)
     personnelId = person?.id || null;
   }
 
-  await supabase
-    .from("discord_attendance_responses")
-    .upsert(
-      {
+  const responsePayload = {
         event_id: eventId,
         option_id: option.id,
         discord_user_id: interaction.user.id,
         discord_display_name: displayName,
         personnel_id: personnelId,
         updated_at: new Date().toISOString(),
-      },
-      { onConflict: "event_id,discord_user_id" },
-    );
+      };
+  if (attendanceApi) {
+    await attendanceApi.upsertResponse({
+      eventId,
+      optionId: option.id,
+      discordUserId: interaction.user.id,
+      displayName,
+      personnelId,
+    });
+  } else {
+    await supabase.from("discord_attendance_responses").upsert(responsePayload, { onConflict: "event_id,discord_user_id" });
+  }
 }
 
 async function cleanupEndedAttendanceEventRoles() {
-  if (!supabase) return;
+  if (!attendanceApi && !supabase) return;
 
-  const { data: events, error } = await supabase
-    .from("discord_attendance_events")
-    .select("id,channel_id,event_starts_at,duration_minutes,scheduled_send_at,repeat_scheduled_send_at,repeat_enabled,repeat_type,reminder_enabled,reminder_scheduled_at")
-    .eq("status", "sent")
-    .is("roles_removed_at", null)
-    .limit(20);
-
-  if (error) {
-    logAttendancePollFailure("[attendance] Role cleanup poll failed:", error);
-    return;
+  let events;
+  if (attendanceApi) {
+    events = (await attendanceApi.claimCleanup()).events || [];
+  } else {
+    const result = await supabase
+      .from("discord_attendance_events")
+      .select("id,channel_id,event_starts_at,duration_minutes,scheduled_send_at,repeat_scheduled_send_at,repeat_enabled,repeat_type,reminder_enabled,reminder_scheduled_at")
+      .eq("status", "sent")
+      .is("roles_removed_at", null)
+      .limit(20);
+    if (result.error) {
+      logAttendancePollFailure("[attendance] Role cleanup poll failed:", result.error);
+      return;
+    }
+    events = result.data || [];
   }
 
   const now = Date.now();
@@ -1237,12 +1309,14 @@ async function cleanupEndedAttendanceEventRoles() {
     if (!Number.isFinite(endsAt) || endsAt > now) continue;
 
     try {
-      const { data: responses, error: responseError } = await supabase
-        .from("discord_attendance_responses")
-        .select("discord_user_id")
-        .eq("event_id", event.id);
-
-      if (responseError) throw responseError;
+      let responses;
+      if (attendanceApi) {
+        responses = (event.discord_user_ids || []).map((discord_user_id) => ({ discord_user_id }));
+      } else {
+        const result = await supabase.from("discord_attendance_responses").select("discord_user_id").eq("event_id", event.id);
+        if (result.error) throw result.error;
+        responses = result.data || [];
+      }
 
       const channel = await client.channels.fetch(event.channel_id).catch(() => null);
       const guild = channel?.guild || (guildId ? await client.guilds.fetch(guildId).catch(() => null) : null);
@@ -1270,43 +1344,30 @@ async function cleanupEndedAttendanceEventRoles() {
           throw new Error("Could not calculate next weekly attendance dates");
         }
 
-        await supabase
-          .from("discord_attendance_responses")
-          .delete()
-          .eq("event_id", event.id);
-
-        await supabase
-          .from("discord_attendance_events")
-          .update({
-            event_starts_at: nextEventStartsAt,
-            scheduled_send_at: nextScheduledSendAt,
-            repeat_scheduled_send_at: nextScheduledSendAt,
-            reminder_scheduled_at: nextReminderScheduledAt,
-            reminder_sent_at: null,
-            roles_removed_at: null,
-            discord_message_id: null,
-            status: "scheduled",
-            failure_reason: null,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", event.id);
+        if (attendanceApi) {
+          await attendanceApi.rollWeekly(event.id, nextEventStartsAt, nextScheduledSendAt, nextReminderScheduledAt);
+        } else {
+          await supabase.from("discord_attendance_responses").delete().eq("event_id", event.id);
+          await supabase
+            .from("discord_attendance_events")
+            .update({ event_starts_at: nextEventStartsAt, scheduled_send_at: nextScheduledSendAt, repeat_scheduled_send_at: nextScheduledSendAt, reminder_scheduled_at: nextReminderScheduledAt, reminder_sent_at: null, roles_removed_at: null, discord_message_id: null, status: "scheduled", failure_reason: null, updated_at: new Date().toISOString() })
+            .eq("id", event.id);
+        }
 
         console.log("[attendance] Rolled weekly event forward:", event.id);
         continue;
       }
 
-      await supabase
-        .from("discord_attendance_events")
-        .update({
-          roles_removed_at: new Date().toISOString(),
-          status: "closed",
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", event.id);
+      if (attendanceApi) {
+        await attendanceApi.close(event.id);
+      } else {
+        await supabase.from("discord_attendance_events").update({ roles_removed_at: new Date().toISOString(), status: "closed", updated_at: new Date().toISOString() }).eq("id", event.id);
+      }
 
       console.log("[attendance] Removed attendance roles for ended event:", event.id);
     } catch (error) {
       console.error("[attendance] Failed to cleanup event roles:", event.id, error);
+      if (attendanceApi) await attendanceApi.releaseCleanup(event.id).catch(() => null);
     }
   }
 }
@@ -1323,7 +1384,22 @@ client.once("ready", async () => {
     );
   });
 
-  if (supabase) {
+  if (discordOutboxUrl && websiteSecret && guildId) {
+    discordOutboxWorker = createDiscordOutboxWorker({
+      client,
+      endpoint: discordOutboxUrl,
+      secret: websiteSecret,
+      guildId,
+      intervalMs: discordOutboxPollIntervalMs,
+    });
+    discordOutboxWorker.start();
+  } else {
+    console.warn(
+      "[discord-outbox] Worker disabled; set DISCORD_OUTBOX_URL after native PostgreSQL cutover.",
+    );
+  }
+
+  if (attendanceApi || supabase) {
     await processDueAttendanceEvents();
     attendancePollTimer = setInterval(
       processDueAttendanceEvents,
@@ -1334,7 +1410,7 @@ client.once("ready", async () => {
     );
   } else {
     console.warn(
-      "[attendance] Supabase client missing; attendance scheduler disabled.",
+      "[attendance] Attendance data source missing; scheduler disabled.",
     );
   }
 
@@ -1378,7 +1454,7 @@ client.once("ready", async () => {
 client.on("interactionCreate", async (interaction) => {
   try {
     if (interaction.isButton() && interaction.customId.startsWith("attendance:")) {
-      if (!supabase) {
+      if (!attendanceApi && !supabase) {
         await interaction.reply({
           content: "Attendance tracking is not available right now.",
           ephemeral: true,
@@ -2229,7 +2305,7 @@ client.on("interactionCreate", async (interaction) => {
 
 client.on("messageReactionAdd", async (reaction, user) => {
   try {
-    if (!supabase || user.bot) return;
+    if ((!attendanceApi && !supabase) || user.bot) return;
 
     if (reaction.partial) {
       reaction = await reaction.fetch();
@@ -2257,7 +2333,7 @@ client.on("messageReactionAdd", async (reaction, user) => {
 
 client.on("messageReactionRemove", async (reaction, user) => {
   try {
-    if (!supabase || user.bot) return;
+    if ((!attendanceApi && !supabase) || user.bot) return;
 
     if (reaction.partial) {
       reaction = await reaction.fetch();
@@ -2283,12 +2359,16 @@ client.on("messageReactionRemove", async (reaction, user) => {
       }
     }
 
-    await supabase
-      .from("discord_attendance_responses")
-      .delete()
-      .eq("event_id", event.id)
-      .eq("option_id", option.id)
-      .eq("discord_user_id", user.id);
+    if (attendanceApi) {
+      await attendanceApi.deleteResponse(event.id, option.id, user.id);
+    } else {
+      await supabase
+        .from("discord_attendance_responses")
+        .delete()
+        .eq("event_id", event.id)
+        .eq("option_id", option.id)
+        .eq("discord_user_id", user.id);
+    }
 
     await renderAttendanceMessage(event.id);
   } catch (error) {
@@ -2451,6 +2531,8 @@ client.on("guildMemberRemove", async (member) => {
 
 function shutdown(signal) {
   console.log(`[shutdown] Received ${signal}. Closing HTTP listener and Discord client.`);
+
+  discordOutboxWorker?.stop();
 
   if (websiteActionServer) {
     websiteActionServer.close(() => {
