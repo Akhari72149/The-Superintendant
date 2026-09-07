@@ -1,5 +1,7 @@
 "use strict";
 
+const { createDecipheriv, createHash } = require("node:crypto");
+
 const DISCORD_ID_PATTERN = /^\d{17,20}$/;
 const USER_INIT_ROLES = Object.freeze([
   "446025365496922142",
@@ -28,6 +30,33 @@ function safeError(error) {
   return String(error?.message || "Discord role update failed")
     .replace(/[\r\n]+/g, " ")
     .slice(0, 500);
+}
+
+function openAccountCredentials(sealed, secret) {
+  if (!sealed || typeof sealed !== "object") throw new Error("Credential payload is missing");
+  const key = createHash("sha256").update(secret).digest();
+  const decipher = createDecipheriv(
+    "aes-256-gcm",
+    key,
+    Buffer.from(String(sealed.iv || ""), "base64url"),
+  );
+  decipher.setAuthTag(Buffer.from(String(sealed.tag || ""), "base64url"));
+  const plaintext = Buffer.concat([
+    decipher.update(Buffer.from(String(sealed.ciphertext || ""), "base64url")),
+    decipher.final(),
+  ]).toString("utf8");
+  const credentials = JSON.parse(plaintext);
+  const username = String(credentials.username || "");
+  const temporaryPassword = String(credentials.temporaryPassword || "");
+  const loginUrl = new URL(String(credentials.loginUrl || ""));
+  if (!/^[a-zA-Z0-9_.-]{2,40}$/.test(username)) throw new Error("Credential username is invalid");
+  if (temporaryPassword.length < 12 || temporaryPassword.length > 128) throw new Error("Temporary password is invalid");
+  const localHttp = loginUrl.protocol === "http:"
+    && (loginUrl.hostname === "localhost" || loginUrl.hostname === "127.0.0.1");
+  if (loginUrl.protocol !== "https:" && !localHttp) {
+    throw new Error("Credential login URL must use HTTPS");
+  }
+  return { username, temporaryPassword, loginUrl: loginUrl.toString() };
 }
 
 function createDiscordOutboxWorker({
@@ -79,6 +108,24 @@ function createDiscordOutboxWorker({
     const discordId = requireDiscordId(payload.discordId, "discordId");
     const guild = await client.guilds.fetch(guildId);
     const member = await guild.members.fetch(discordId);
+
+    if (event.eventType === "ACCOUNT_CREDENTIALS_DM") {
+      const credentials = openAccountCredentials(payload.sealed, secret);
+      await member.send({
+        embeds: [{
+          color: 0x00ff66,
+          title: "101st Doom Battalion Website Login",
+          description: "A website login account has been created for you.",
+          fields: [
+            { name: "Login", value: `[Open the website login page](${credentials.loginUrl})` },
+            { name: "Username", value: `\`${credentials.username}\``, inline: true },
+            { name: "Temporary Password", value: `\`${credentials.temporaryPassword}\`` },
+          ],
+          footer: { text: "You will be required to choose a new password when you first log in." },
+        }],
+      });
+      return;
+    }
 
     if (event.eventType === "CERT_ROLE_SYNC") {
       const roleId = requireDiscordId(payload.roleId, "roleId");
@@ -180,5 +227,5 @@ function createDiscordOutboxWorker({
 
 module.exports = {
   createDiscordOutboxWorker,
+  openAccountCredentials,
 };
-
