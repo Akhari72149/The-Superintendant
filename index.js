@@ -658,7 +658,7 @@ function summariseAttendanceError(error) {
   const htmlSummary = titleMatch?.[1] || htmlHeadingMatch?.[1] || "";
   const isHtml = /<!doctype html|<html[\s>]/i.test(rawMessage);
   const message = isHtml
-    ? `Supabase returned an HTML error page${htmlSummary ? `: ${htmlSummary}` : ""}`
+    ? `Attendance data source returned an HTML error page${htmlSummary ? `: ${htmlSummary}` : ""}`
     : rawMessage;
 
   return {
@@ -696,12 +696,15 @@ function logAttendancePollFailure(label, error) {
   console.error(label, summary);
 
   if (isTransientAttendanceError(error)) {
+    const dataSource = attendanceApi
+      ? "Website attendance API"
+      : "Supabase attendance fallback";
     attendancePollBackoffUntil = Math.max(
       attendancePollBackoffUntil,
       Date.now() + attendancePollBackoffMs,
     );
     console.warn(
-      `[attendance] Supabase appears temporarily unavailable; backing off polling for ${attendancePollBackoffMs}ms.`,
+      `[attendance] ${dataSource} appears temporarily unavailable; backing off polling for ${attendancePollBackoffMs}ms.`,
     );
   }
 }
@@ -1400,6 +1403,12 @@ client.once("ready", async () => {
   }
 
   if (attendanceApi || supabase) {
+    console.log(
+      `[attendance] Data source: ${attendanceApi ? "website API (native PostgreSQL)" : "legacy Supabase fallback"}`,
+    );
+    if (attendanceApi && supabase) {
+      console.log("[attendance] Legacy Supabase credentials are configured but are not used for attendance polling.");
+    }
     await processDueAttendanceEvents();
     attendancePollTimer = setInterval(
       processDueAttendanceEvents,
