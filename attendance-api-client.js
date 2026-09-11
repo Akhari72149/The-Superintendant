@@ -29,6 +29,7 @@ function createAttendanceApiClient({ endpoint, secret, fetchImpl = fetch }) {
     claimEvents: () => request("claim-events"),
     eventSent: (eventId, messageId) => request("event-sent", { eventId, messageId }),
     eventFailed: (eventId, error) => request("event-failed", { eventId, error }),
+    claimResend: (eventId) => request("claim-resend", { eventId }),
     claimReminders: () => request("claim-reminders"),
     reminderSent: (eventId) => request("reminder-sent", { eventId }),
     releaseReminder: (eventId) => request("release-reminder", { eventId }),

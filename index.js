@@ -423,11 +423,51 @@ app.post("/attendance/refresh", async (req, res) => {
       });
     }
 
-    await renderAttendanceMessage(eventId);
+    const mode = String(req.body?.mode || "refresh");
+    let action = "refreshed";
+    const refreshed = await renderAttendanceMessage(eventId);
+
+    if (mode === "ensure-sent" && !refreshed) {
+      if (attendanceApi) {
+        await attendanceApi.claimResend(eventId);
+      } else {
+        const { data, error } = await supabase
+          .from("discord_attendance_events")
+          .update({ status: "sending", failure_reason: null, updated_at: new Date().toISOString() })
+          .eq("id", eventId)
+          .in("status", ["scheduled", "sent", "failed"])
+          .select("id")
+          .maybeSingle();
+        if (error || !data) throw error || new Error("Attendance event cannot be resent");
+      }
+
+      try {
+        await sendAttendanceEvent(eventId);
+        action = "sent";
+      } catch (error) {
+        if (attendanceApi) {
+          await attendanceApi
+            .eventFailed(eventId, error.message || "Failed to resend attendance event")
+            .catch(() => null);
+        } else {
+          await supabase
+            .from("discord_attendance_events")
+            .update({
+              status: "failed",
+              failure_reason: error.message || "Failed to resend attendance event",
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", eventId)
+            .eq("status", "sending");
+        }
+        throw error;
+      }
+    }
 
     return res.json({
       success: true,
       event_id: eventId,
+      action,
     });
   } catch (error) {
     console.error("[attendance] Website refresh failed:", error);
@@ -918,23 +958,24 @@ function buildAttendanceEmbed(event, options, responses) {
 }
 
 async function renderAttendanceMessage(eventId) {
-  if (!attendanceApi && !supabase) return;
+  if (!attendanceApi && !supabase) return false;
 
   const { event, options, responses } = await getAttendanceEventBundle(eventId);
-  if (!event.discord_message_id) return;
+  if (!event.discord_message_id) return false;
 
   const channel = await client.channels.fetch(event.channel_id).catch(() => null);
-  if (!channel?.isTextBased()) return;
+  if (!channel?.isTextBased()) return false;
 
   const message = await channel.messages
     .fetch(event.discord_message_id)
     .catch(() => null);
-  if (!message) return;
+  if (!message) return false;
 
   await message.edit({
     embeds: [buildAttendanceEmbed(event, options, responses)],
     components: buildAttendanceComponents(options),
   });
+  return true;
 }
 
 async function sendAttendanceEvent(eventId) {

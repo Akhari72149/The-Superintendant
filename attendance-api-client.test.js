@@ -37,3 +37,22 @@ test("attendance API client surfaces server errors", async () => {
 
   await assert.rejects(() => client.close("00000000-0000-4000-8000-000000000000"), /CONFLICT/);
 });
+
+test("attendance API client claims an explicit resend", async () => {
+  let payload;
+  const eventId = "00000000-0000-4000-8000-000000000000";
+  const client = createAttendanceApiClient({
+    endpoint: "https://example.test/api/internal/discord-attendance",
+    secret: "c".repeat(32),
+    fetchImpl: async (_url, options) => {
+      payload = JSON.parse(options.body);
+      return new Response(JSON.stringify({ claimed: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    },
+  });
+
+  assert.deepEqual(await client.claimResend(eventId), { claimed: true });
+  assert.deepEqual(payload, { action: "claim-resend", eventId });
+});
