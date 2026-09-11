@@ -140,9 +140,27 @@ function createDiscordOutboxWorker({
     }
 
     if (event.eventType === "USER_ROLE_INIT") {
-      if (member.roles.cache.has(NO_ROLES_TAG_ID)) {
-        await member.roles.remove(NO_ROLES_TAG_ID);
+      const inactiveRoles = [NO_ROLES_TAG_ID, RETIRED_TAG_ID].filter((roleId) =>
+        member.roles.cache.has(roleId),
+      );
+      if (inactiveRoles.length) await member.roles.remove(inactiveRoles);
+
+      if (payload.reactivation === true) {
+        const targetRankRoleId = payload.rankRoleId
+          ? requireDiscordId(payload.rankRoleId, "rankRoleId")
+          : null;
+        const knownRankRoleIds = Array.isArray(payload.rankRoleIds)
+          ? payload.rankRoleIds.map((roleId) => requireDiscordId(roleId, "rankRoleIds"))
+          : [];
+        const staleRankRoles = knownRankRoleIds.filter((roleId) =>
+          roleId !== targetRankRoleId && member.roles.cache.has(roleId),
+        );
+        if (staleRankRoles.length) await member.roles.remove(staleRankRoles);
+        if (targetRankRoleId && !member.roles.cache.has(targetRankRoleId)) {
+          await member.roles.add(targetRankRoleId);
+        }
       }
+
       const missing = USER_INIT_ROLES.filter((roleId) => !member.roles.cache.has(roleId));
       if (missing.length) await member.roles.add(missing);
       return;
