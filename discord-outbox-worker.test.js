@@ -3,7 +3,7 @@
 const assert = require("node:assert/strict");
 const { createCipheriv, createHash, randomBytes } = require("node:crypto");
 const test = require("node:test");
-const { openAccountCredentials } = require("./discord-outbox-worker");
+const { openAccountCredentials, reconcileMemberRoles } = require("./discord-outbox-worker");
 
 function seal(value, secret) {
   const iv = randomBytes(12);
@@ -39,4 +39,28 @@ test("rejects account credentials opened with the wrong secret", () => {
   assert.throws(
     () => openAccountCredentials(sealed, "incorrect-secret-value-that-is-longer-than-32-characters"),
   );
+});
+
+test("role reconciliation preserves shared roles and applies only required changes", async () => {
+  const removed = [];
+  const added = [];
+  const member = {
+    roles: {
+      cache: new Map([
+        ["11111111111111111", {}],
+        ["22222222222222222", {}],
+      ]),
+      remove: async (roleIds) => removed.push(...roleIds),
+      add: async (roleIds) => added.push(...roleIds),
+    },
+  };
+
+  await reconcileMemberRoles(
+    member,
+    ["22222222222222222", "33333333333333333"],
+    ["11111111111111111", "22222222222222222"],
+  );
+
+  assert.deepEqual(removed, ["11111111111111111"]);
+  assert.deepEqual(added, ["33333333333333333"]);
 });

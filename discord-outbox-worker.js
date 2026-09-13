@@ -17,6 +17,7 @@ const USER_INIT_ROLES = Object.freeze([
 ]);
 const NO_ROLES_TAG_ID = "492653693091577856";
 const RETIRED_TAG_ID = "586776577707081739";
+const DEFAULT_SLOT_ROLE_ID = "497834542900445195";
 
 function requireDiscordId(value, field) {
   const id = String(value || "");
@@ -24,6 +25,22 @@ function requireDiscordId(value, field) {
     throw new Error(`Invalid ${field}`);
   }
   return id;
+}
+
+function requireDiscordIds(values, field) {
+  if (!Array.isArray(values)) throw new Error(`Invalid ${field}`);
+  return [...new Set(values.map((value) => requireDiscordId(value, field)))];
+}
+
+async function reconcileMemberRoles(member, rolesToAdd, rolesToRemove) {
+  const add = [...new Set(rolesToAdd)];
+  const addSet = new Set(add);
+  const remove = [...new Set(rolesToRemove)].filter((roleId) => !addSet.has(roleId));
+  const existingToRemove = remove.filter((roleId) => member.roles.cache.has(roleId));
+  const missingToAdd = add.filter((roleId) => !member.roles.cache.has(roleId));
+
+  if (existingToRemove.length) await member.roles.remove(existingToRemove);
+  if (missingToAdd.length) await member.roles.add(missingToAdd);
 }
 
 function safeError(error) {
@@ -176,6 +193,31 @@ function createDiscordOutboxWorker({
       return;
     }
 
+    if (event.eventType === "SLOT_ROLE_SYNC") {
+      const rolesToAdd = requireDiscordIds(payload.roleIdsToAdd || [], "roleIdsToAdd");
+      const rolesToRemove = requireDiscordIds(payload.roleIdsToRemove || [], "roleIdsToRemove");
+
+      if (payload.slotId) {
+        rolesToRemove.push(DEFAULT_SLOT_ROLE_ID);
+      } else if (payload.forceDefaultRole === true) {
+        rolesToAdd.push(DEFAULT_SLOT_ROLE_ID);
+      }
+
+      await reconcileMemberRoles(member, rolesToAdd, rolesToRemove);
+      return;
+    }
+
+    if (event.eventType === "RANK_ROLE_SYNC") {
+      const rolesToAdd = payload.newRoleId
+        ? [requireDiscordId(payload.newRoleId, "newRoleId")]
+        : [];
+      const rolesToRemove = payload.oldRoleId
+        ? [requireDiscordId(payload.oldRoleId, "oldRoleId")]
+        : [];
+      await reconcileMemberRoles(member, rolesToAdd, rolesToRemove);
+      return;
+    }
+
     throw new Error("Unsupported outbox event type");
   }
 
@@ -246,4 +288,5 @@ function createDiscordOutboxWorker({
 module.exports = {
   createDiscordOutboxWorker,
   openAccountCredentials,
+  reconcileMemberRoles,
 };
