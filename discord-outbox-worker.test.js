@@ -64,3 +64,53 @@ test("role reconciliation preserves shared roles and applies only required chang
   assert.deepEqual(removed, ["11111111111111111"]);
   assert.deepEqual(added, ["33333333333333333"]);
 });
+
+test("Discord import returns the member's current role IDs to the website", async () => {
+  const requests = [];
+  const worker = require("./discord-outbox-worker").createDiscordOutboxWorker({
+    client: {
+      guilds: {
+        fetch: async () => ({
+          members: {
+            fetch: async () => ({
+              roles: {
+                cache: new Map([
+                  ["11111111111111111", {}],
+                  ["22222222222222222", {}],
+                ]),
+              },
+            }),
+          },
+        }),
+      },
+    },
+    endpoint: "https://example.test/api/internal/discord-outbox",
+    secret: "shared-secret-value-that-is-longer-than-32-characters",
+    guildId: "33333333333333333",
+    fetchImpl: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      requests.push(body);
+      const response = body.action === "claim"
+        ? { events: [{
+          id: "11111111-1111-4111-8111-111111111111",
+          eventType: "USER_FULL_IMPORT",
+          payload: { discordId: "44444444444444444" },
+          attemptCount: 1,
+        }] }
+        : { completed: true };
+      return { ok: true, json: async () => response };
+    },
+    logger: { log() {}, error() {} },
+  });
+
+  await worker.poll();
+
+  assert.deepEqual(requests[1], {
+    action: "complete",
+    worker: `discord-bot-${process.pid}`,
+    eventId: "11111111-1111-4111-8111-111111111111",
+    result: {
+      discordRoleIds: ["11111111111111111", "22222222222222222"],
+    },
+  });
+});

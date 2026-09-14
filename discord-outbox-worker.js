@@ -218,16 +218,21 @@ function createDiscordOutboxWorker({
       return;
     }
 
+    if (event.eventType === "USER_FULL_IMPORT") {
+      return { discordRoleIds: [...member.roles.cache.keys()] };
+    }
+
     throw new Error("Unsupported outbox event type");
   }
 
   async function processEvent(event) {
     try {
-      await applyEvent(event);
+      const result = await applyEvent(event);
       await request({
         action: "complete",
         worker: workerId,
         eventId: event.id,
+        result,
       });
       logger.log("[discord-outbox] Completed", {
         id: event.id,
