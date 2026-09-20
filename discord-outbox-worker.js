@@ -49,6 +49,11 @@ function safeError(error) {
     .slice(0, 500);
 }
 
+function isUnknownMember(error) {
+  return Number(error?.code) === 10007
+    || String(error?.message || "").toLowerCase().includes("unknown member");
+}
+
 function openAccountCredentials(sealed, secret) {
   if (!sealed || typeof sealed !== "object") throw new Error("Credential payload is missing");
   const key = createHash("sha256").update(secret).digest();
@@ -124,7 +129,19 @@ function createDiscordOutboxWorker({
 
     const discordId = requireDiscordId(payload.discordId, "discordId");
     const guild = await client.guilds.fetch(guildId);
-    const member = await guild.members.fetch(discordId);
+    let member;
+    try {
+      member = await guild.members.fetch(discordId);
+    } catch (error) {
+      if (event.eventType === "PERSONNEL_STATUS_SYNC" && isUnknownMember(error)) {
+        logger.log("[discord-outbox] Status sync skipped; member is no longer in the guild", {
+          id: event.id,
+          discordId,
+        });
+        return { skipped: "unknown-member" };
+      }
+      throw error;
+    }
 
     if (event.eventType === "ACCOUNT_CREDENTIALS_DM") {
       const credentials = openAccountCredentials(payload.sealed, secret);

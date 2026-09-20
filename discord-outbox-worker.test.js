@@ -114,3 +114,71 @@ test("Discord import returns the member's current role IDs to the website", asyn
     },
   });
 });
+
+test("missing members complete personnel status cleanup as a no-op", async () => {
+  const requests = [];
+  const unknownMember = Object.assign(new Error("Unknown Member"), { code: 10007 });
+  const worker = require("./discord-outbox-worker").createDiscordOutboxWorker({
+    client: {
+      guilds: {
+        fetch: async () => ({ members: { fetch: async () => { throw unknownMember; } } }),
+      },
+    },
+    endpoint: "https://example.test/api/internal/discord-outbox",
+    secret: "shared-secret-value-that-is-longer-than-32-characters",
+    guildId: "33333333333333333",
+    fetchImpl: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      requests.push(body);
+      return {
+        ok: true,
+        json: async () => body.action === "claim" ? { events: [{
+          id: "11111111-1111-4111-8111-111111111111",
+          eventType: "PERSONNEL_STATUS_SYNC",
+          payload: { discordId: "44444444444444444", status: "removed" },
+          attemptCount: 1,
+        }] } : { completed: true },
+      };
+    },
+    logger: { log() {}, error() {} },
+  });
+
+  await worker.poll();
+
+  assert.equal(requests[1].action, "complete");
+  assert.deepEqual(requests[1].result, { skipped: "unknown-member" });
+});
+
+test("missing members remain failures for rank role sync", async () => {
+  const requests = [];
+  const unknownMember = Object.assign(new Error("Unknown Member"), { code: 10007 });
+  const worker = require("./discord-outbox-worker").createDiscordOutboxWorker({
+    client: {
+      guilds: {
+        fetch: async () => ({ members: { fetch: async () => { throw unknownMember; } } }),
+      },
+    },
+    endpoint: "https://example.test/api/internal/discord-outbox",
+    secret: "shared-secret-value-that-is-longer-than-32-characters",
+    guildId: "33333333333333333",
+    fetchImpl: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      requests.push(body);
+      return {
+        ok: true,
+        json: async () => body.action === "claim" ? { events: [{
+          id: "11111111-1111-4111-8111-111111111111",
+          eventType: "RANK_ROLE_SYNC",
+          payload: { discordId: "44444444444444444", newRoleId: "55555555555555555" },
+          attemptCount: 1,
+        }] } : { failed: true },
+      };
+    },
+    logger: { log() {}, error() {} },
+  });
+
+  await worker.poll();
+
+  assert.equal(requests[1].action, "fail");
+  assert.equal(requests[1].error, "Unknown Member");
+});
