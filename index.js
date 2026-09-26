@@ -223,6 +223,32 @@ async function getPersonnelMention(personnelId, fallbackName, suppliedDiscordId)
   return data.name || fallbackName || "Unknown";
 }
 
+function getAwardSymbol(iconKey) {
+  const symbols = {
+    paperclip: "📎",
+    swords: "⚔️",
+    medical: "⚕️",
+    shield: "🛡️",
+    star: "⭐",
+    engineering: "🛠️",
+    ribbon: "🎗️",
+    laurel: "🏵️",
+    trophy: "🏆",
+    armor: "🦺",
+    tank: "🛡️",
+    jet: "✈️",
+    starfighter: "🚀",
+    heart: "❤️",
+    server: "🖥️",
+  };
+  return symbols[String(iconKey || "").toLowerCase()] || "🏅";
+}
+
+function getAwardColor(value, fallback) {
+  const match = /^#([0-9a-f]{6})$/i.exec(String(value || ""));
+  return match ? Number.parseInt(match[1], 16) : fallback;
+}
+
 function buildWebsiteActionEmbed(payload, personnelMention) {
   const action = payload.action;
 
@@ -235,6 +261,11 @@ function buildWebsiteActionEmbed(payload, personnelMention) {
     payload.slotLabel || payload.target_slot_label || "Unknown Slot";
   const slotSection =
     payload.slotSection || payload.target_slot_section || "N/A";
+  const awardName = payload.awardName || "Unknown Medal";
+  const awardCategory = payload.awardCategory || "Medal & Award";
+  const awardNotes = payload.awardNotes || "No citation notes supplied.";
+  const awardSymbol = getAwardSymbol(payload.awardIconKey);
+  const awardColor = getAwardColor(payload.awardColor, 0xf5c542);
 
   const configs = {
     POSITION_ASSIGNED: {
@@ -292,6 +323,31 @@ function buildWebsiteActionEmbed(payload, personnelMention) {
         { name: "Member", value: personnelMention, inline: false },
         { name: "Certification", value: certName, inline: true },
         { name: "Revoked By", value: processedBy, inline: true },
+      ],
+    },
+
+    MEDAL_AWARDED: {
+      title: `${awardSymbol} MEDAL AWARDED`,
+      color: awardColor,
+      summary: "A battalion medal has been awarded.",
+      fields: [
+        { name: "Member", value: personnelMention, inline: false },
+        { name: "Medal", value: `${awardSymbol} ${awardName}`, inline: true },
+        { name: "Category", value: awardCategory, inline: true },
+        { name: "Awarded By", value: processedBy, inline: false },
+        { name: "Citation", value: String(awardNotes).slice(0, 1024), inline: false },
+      ],
+    },
+
+    MEDAL_REVOKED: {
+      title: `${awardSymbol} MEDAL REMOVED`,
+      color: 0xe74c3c,
+      summary: "A battalion medal has been removed from a personnel record.",
+      fields: [
+        { name: "Member", value: personnelMention, inline: false },
+        { name: "Medal", value: `${awardSymbol} ${awardName}`, inline: true },
+        { name: "Category", value: awardCategory, inline: true },
+        { name: "Removed By", value: processedBy, inline: false },
       ],
     },
   };
