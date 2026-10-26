@@ -32,6 +32,12 @@ const modteamGuildId = process.env.MODTEAM_GUILD_ID;
 
 const websiteSecret = process.env.WEBSITE_BOT_SECRET;
 const discordOutboxUrl = process.env.DISCORD_OUTBOX_URL?.trim();
+const promotionReadinessUrl = process.env.PROMOTION_READINESS_URL?.trim()
+  || (discordOutboxUrl ? discordOutboxUrl.replace(/\/api\/internal\/discord-outbox\/?$/, "/api/admin/promotion-readiness") : "");
+const promotionReadinessPollIntervalMs = Math.max(
+  300000,
+  Number(process.env.PROMOTION_READINESS_POLL_INTERVAL_MS) || 600000,
+);
 const attendanceApiUrl =
   process.env.ATTENDANCE_API_URL?.trim() ||
   (discordOutboxUrl
@@ -80,6 +86,7 @@ const remoteServerChoices = Object.entries(remoteServers).map(
   }),
 );
 const websiteAuditChannelId = "719715342884143204";
+const promotionLogChannelId = process.env.PROMOTION_LOG_CHANNEL_ID?.trim() || websiteAuditChannelId;
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -304,6 +311,17 @@ function buildWebsiteActionEmbed(payload, personnelMention) {
       ],
     },
 
+    PROMOTION_READY: {
+      title: "🟢 READY FOR PROMOTION",
+      color: 0x00ff66,
+      summary: "A member has met every published automatic promotion requirement.",
+      fields: [
+        { name: "Member", value: personnelMention, inline: false },
+        { name: "Current Rank", value: oldRankName, inline: true },
+        { name: "Ready For", value: rankName, inline: true },
+      ],
+    },
+
     CERTIFICATION_ASSIGNED: {
       title: "🟣 CERTIFICATION AWARDED",
       color: 0x9b59b6,
@@ -418,7 +436,8 @@ app.post("/website-action", async (req, res) => {
 
     console.log("[website-action] Target personnel mention:", personnelMention);
 
-    const channel = await client.channels.fetch(websiteAuditChannelId);
+    const isPromotionReady = payload.action === "PROMOTION_READY";
+    const channel = await client.channels.fetch(isPromotionReady ? promotionLogChannelId : websiteAuditChannelId);
 
     if (!channel) {
       return res.status(404).json({
@@ -428,11 +447,15 @@ app.post("/website-action", async (req, res) => {
 
     const embed = buildWebsiteActionEmbed(payload, personnelMention);
 
+    const leadershipDiscordIds = isPromotionReady && Array.isArray(payload.leadershipDiscordIds)
+      ? [...new Set(payload.leadershipDiscordIds.map(String).filter((id) => /^\d{17,20}$/.test(id)))]
+      : [];
     await channel.send({
+      content: leadershipDiscordIds.map((id) => `<@${id}>`).join(" ") || undefined,
       embeds: [embed],
-      allowedMentions: {
-        parse: ["users"],
-      },
+      allowedMentions: isPromotionReady
+        ? { users: leadershipDiscordIds }
+        : { parse: ["users"] },
     });
 
     return res.json({
@@ -1490,9 +1513,30 @@ client.once("ready", async () => {
       endpoint: discordOutboxUrl,
       secret: websiteSecret,
       guildId,
+      promotionLogChannelId,
       intervalMs: discordOutboxPollIntervalMs,
     });
     discordOutboxWorker.start();
+    if (promotionReadinessUrl) {
+      const refreshPromotionReadiness = async () => {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 15000);
+        try {
+          const response = await fetch(promotionReadinessUrl, {
+            headers: { Accept: "application/json" },
+            signal: controller.signal,
+          });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        } catch (error) {
+          console.error("[promotion-readiness] Scheduled recalculation failed:", error?.message || error);
+        } finally {
+          clearTimeout(timeout);
+        }
+      };
+      void refreshPromotionReadiness();
+      const promotionReadinessTimer = setInterval(refreshPromotionReadiness, promotionReadinessPollIntervalMs);
+      promotionReadinessTimer.unref?.();
+    }
   } else {
     console.warn(
       "[discord-outbox] Worker disabled; set DISCORD_OUTBOX_URL after native PostgreSQL cutover.",

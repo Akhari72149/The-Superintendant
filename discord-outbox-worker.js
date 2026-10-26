@@ -86,6 +86,7 @@ function createDiscordOutboxWorker({
   endpoint,
   secret,
   guildId,
+  promotionLogChannelId,
   intervalMs = 10000,
   workerId = `discord-bot-${process.pid}`,
   fetchImpl = fetch,
@@ -125,6 +126,36 @@ function createDiscordOutboxWorker({
     const payload = event?.payload;
     if (!payload || typeof payload !== "object") {
       throw new Error("Outbox payload is invalid");
+    }
+
+    if (event.eventType === "PROMOTION_READY") {
+      const channelId = requireDiscordId(promotionLogChannelId, "promotionLogChannelId");
+      const leadershipDiscordIds = requireDiscordIds(payload.leadershipDiscordIds || [], "leadershipDiscordIds");
+      const targetDiscordId = payload.discordId
+        ? requireDiscordId(payload.discordId, "discordId")
+        : null;
+      const personnelName = String(payload.personnelName || "Unknown Member").slice(0, 100);
+      const personnelMention = targetDiscordId ? `<@${targetDiscordId}>` : personnelName;
+      const channel = await client.channels.fetch(channelId);
+      if (!channel?.send) throw new Error("Promotion log channel is unavailable");
+      await channel.send({
+        content: leadershipDiscordIds.map((id) => `<@${id}>`).join(" ") || undefined,
+        embeds: [{
+          color: 0x00ff66,
+          author: { name: "101st Doom Battalion PCS" },
+          title: "READY FOR PROMOTION",
+          description: `${personnelMention} is ready to be promoted from **${String(payload.oldRankName || "Unknown").slice(0, 100)}** to **${String(payload.rankName || "Unknown").slice(0, 100)}**.`,
+          fields: [
+            { name: "Member", value: personnelMention, inline: false },
+            { name: "Current Rank", value: String(payload.oldRankName || "Unknown").slice(0, 100), inline: true },
+            { name: "Ready For", value: String(payload.rankName || "Unknown").slice(0, 100), inline: true },
+          ],
+          footer: { text: "Promotion readiness calculated automatically" },
+          timestamp: new Date().toISOString(),
+        }],
+        allowedMentions: { users: leadershipDiscordIds },
+      });
+      return;
     }
 
     const discordId = requireDiscordId(payload.discordId, "discordId");

@@ -182,3 +182,43 @@ test("missing members remain failures for rank role sync", async () => {
   assert.equal(requests[1].action, "fail");
   assert.equal(requests[1].error, "Unknown Member");
 });
+
+test("promotion readiness pings leadership in the promotion log", async () => {
+  const requests = [];
+  const messages = [];
+  const worker = require("./discord-outbox-worker").createDiscordOutboxWorker({
+    client: {
+      channels: { fetch: async () => ({ send: async (message) => messages.push(message) }) },
+    },
+    endpoint: "https://example.test/api/internal/discord-outbox",
+    secret: "shared-secret-value-that-is-longer-than-32-characters",
+    guildId: "33333333333333333",
+    promotionLogChannelId: "66666666666666666",
+    fetchImpl: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      requests.push(body);
+      return {
+        ok: true,
+        json: async () => body.action === "claim" ? { events: [{
+          id: "11111111-1111-4111-8111-111111111111",
+          eventType: "PROMOTION_READY",
+          payload: {
+            discordId: "44444444444444444",
+            personnelName: "Example",
+            oldRankName: "CT",
+            rankName: "PTC",
+            leadershipDiscordIds: ["77777777777777777", "88888888888888888"],
+          },
+          attemptCount: 1,
+        }] } : { completed: true },
+      };
+    },
+    logger: { log() {}, error() {} },
+  });
+
+  await worker.poll();
+
+  assert.equal(messages[0].content, "<@77777777777777777> <@88888888888888888>");
+  assert.match(messages[0].embeds[0].description, /ready to be promoted from \*\*CT\*\* to \*\*PTC\*\*/);
+  assert.equal(requests[1].action, "complete");
+});
