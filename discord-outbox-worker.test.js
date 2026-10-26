@@ -208,6 +208,7 @@ test("promotion readiness pings leadership in the promotion log", async () => {
             oldRankName: "CT",
             rankName: "PTC",
             leadershipDiscordIds: ["77777777777777777", "88888888888888888"],
+            leadershipRoleIds: ["704516430531395634"],
           },
           attemptCount: 1,
         }] } : { completed: true },
@@ -218,7 +219,11 @@ test("promotion readiness pings leadership in the promotion log", async () => {
 
   await worker.poll();
 
-  assert.equal(messages[0].content, "<@77777777777777777> <@88888888888888888>");
+  assert.equal(messages[0].content, "<@77777777777777777> <@88888888888888888> <@&704516430531395634>");
+  assert.deepEqual(messages[0].allowedMentions, {
+    users: ["77777777777777777", "88888888888888888"],
+    roles: ["704516430531395634"],
+  });
   assert.match(messages[0].embeds[0].description, /ready to be promoted from \*\*CT\*\* to \*\*PTC\*\*/);
   assert.equal(requests[1].action, "complete");
 });

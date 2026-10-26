@@ -450,11 +450,17 @@ app.post("/website-action", async (req, res) => {
     const leadershipDiscordIds = isPromotionReady && Array.isArray(payload.leadershipDiscordIds)
       ? [...new Set(payload.leadershipDiscordIds.map(String).filter((id) => /^\d{17,20}$/.test(id)))]
       : [];
+    const leadershipRoleIds = isPromotionReady && Array.isArray(payload.leadershipRoleIds)
+      ? [...new Set(payload.leadershipRoleIds.map(String).filter((id) => /^\d{17,20}$/.test(id)))]
+      : [];
     await channel.send({
-      content: leadershipDiscordIds.map((id) => `<@${id}>`).join(" ") || undefined,
+      content: [
+        ...leadershipDiscordIds.map((id) => `<@${id}>`),
+        ...leadershipRoleIds.map((id) => `<@&${id}>`),
+      ].join(" ") || undefined,
       embeds: [embed],
       allowedMentions: isPromotionReady
-        ? { users: leadershipDiscordIds }
+        ? { users: leadershipDiscordIds, roles: leadershipRoleIds }
         : { parse: ["users"] },
     });
 

@@ -131,6 +131,7 @@ function createDiscordOutboxWorker({
     if (event.eventType === "PROMOTION_READY") {
       const channelId = requireDiscordId(promotionLogChannelId, "promotionLogChannelId");
       const leadershipDiscordIds = requireDiscordIds(payload.leadershipDiscordIds || [], "leadershipDiscordIds");
+      const leadershipRoleIds = requireDiscordIds(payload.leadershipRoleIds || [], "leadershipRoleIds");
       const targetDiscordId = payload.discordId
         ? requireDiscordId(payload.discordId, "discordId")
         : null;
@@ -139,7 +140,10 @@ function createDiscordOutboxWorker({
       const channel = await client.channels.fetch(channelId);
       if (!channel?.send) throw new Error("Promotion log channel is unavailable");
       await channel.send({
-        content: leadershipDiscordIds.map((id) => `<@${id}>`).join(" ") || undefined,
+        content: [
+          ...leadershipDiscordIds.map((id) => `<@${id}>`),
+          ...leadershipRoleIds.map((id) => `<@&${id}>`),
+        ].join(" ") || undefined,
         embeds: [{
           color: 0x00ff66,
           author: { name: "101st Doom Battalion PCS" },
@@ -153,7 +157,7 @@ function createDiscordOutboxWorker({
           footer: { text: "Promotion readiness calculated automatically" },
           timestamp: new Date().toISOString(),
         }],
-        allowedMentions: { users: leadershipDiscordIds },
+        allowedMentions: { users: leadershipDiscordIds, roles: leadershipRoleIds },
       });
       return;
     }
