@@ -4,7 +4,6 @@ const { createDecipheriv, createHash } = require("node:crypto");
 
 const DISCORD_ID_PATTERN = /^\d{17,20}$/;
 const USER_INIT_ROLES = Object.freeze([
-  "446025365496922142",
   "848579852712804383",
   "848594325695758407",
   "848607945825845309",
@@ -214,7 +213,7 @@ function createDiscordOutboxWorker({
       );
       if (inactiveRoles.length) await member.roles.remove(inactiveRoles);
 
-      if (payload.reactivation === true) {
+      if (payload.reactivation === true || payload.reconcileRank === true) {
         const targetRankRoleId = payload.rankRoleId
           ? requireDiscordId(payload.rankRoleId, "rankRoleId")
           : null;

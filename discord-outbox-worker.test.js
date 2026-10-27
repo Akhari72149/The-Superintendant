@@ -65,6 +65,109 @@ test("role reconciliation preserves shared roles and applies only required chang
   assert.deepEqual(added, ["33333333333333333"]);
 });
 
+test("user initialization assigns only the supplied current rank", async () => {
+  const requests = [];
+  const added = [];
+  const removed = [];
+  const recruitRoleId = "446025365496922142";
+  const currentRankRoleId = "555555555555555555";
+  const member = {
+    roles: {
+      cache: new Map([[recruitRoleId, {}]]),
+      add: async (roleIds) => added.push(...(Array.isArray(roleIds) ? roleIds : [roleIds])),
+      remove: async (roleIds) => removed.push(...(Array.isArray(roleIds) ? roleIds : [roleIds])),
+      set: async () => {},
+    },
+  };
+  const worker = require("./discord-outbox-worker").createDiscordOutboxWorker({
+    client: { guilds: { fetch: async () => ({ members: { fetch: async () => member } }) } },
+    endpoint: "https://example.test/api/internal/discord-outbox",
+    secret: "shared-secret-value-that-is-longer-than-32-characters",
+    guildId: "333333333333333333",
+    fetchImpl: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      requests.push(body);
+      return {
+        ok: true,
+        json: async () => body.action === "claim" ? { events: [{
+          id: "11111111-1111-4111-8111-111111111111",
+          eventType: "USER_ROLE_INIT",
+          payload: {
+            discordId: "444444444444444444",
+            rankRoleId: currentRankRoleId,
+            rankRoleIds: [recruitRoleId, currentRankRoleId],
+            reconcileRank: true,
+          },
+          attemptCount: 1,
+        }] } : { completed: true },
+      };
+    },
+    logger: { log() {}, error() {} },
+  });
+
+  await worker.poll();
+
+  assert.deepEqual(removed, [recruitRoleId]);
+  assert.ok(added.includes(currentRankRoleId));
+  assert.ok(!added.includes(recruitRoleId));
+  assert.equal(requests[1].action, "complete");
+});
+
+test("worker resumes polling after a transient website failure", async () => {
+  const requests = [];
+  const errors = [];
+  let claimAttempts = 0;
+  const worker = require("./discord-outbox-worker").createDiscordOutboxWorker({
+    client: {
+      guilds: {
+        fetch: async () => ({
+          members: {
+            fetch: async () => ({
+              roles: {
+                cache: new Map(),
+                add: async () => {},
+                remove: async () => {},
+                set: async () => {},
+              },
+            }),
+          },
+        }),
+      },
+    },
+    endpoint: "https://example.test/api/internal/discord-outbox",
+    secret: "shared-secret-value-that-is-longer-than-32-characters",
+    guildId: "333333333333333333",
+    fetchImpl: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      requests.push(body);
+      if (body.action === "claim" && claimAttempts++ === 0) {
+        throw new Error("temporary website failure");
+      }
+      return {
+        ok: true,
+        json: async () => body.action === "claim" ? { events: [{
+          id: "11111111-1111-4111-8111-111111111111",
+          eventType: "RANK_ROLE_SYNC",
+          payload: {
+            discordId: "444444444444444444",
+            oldRoleId: null,
+            newRoleId: "555555555555555555",
+          },
+          attemptCount: 1,
+        }] } : { completed: true },
+      };
+    },
+    logger: { log() {}, error: (...args) => errors.push(args) },
+  });
+
+  await worker.poll();
+  await worker.poll();
+
+  assert.equal(errors.length, 1);
+  assert.equal(requests.filter((request) => request.action === "claim").length, 2);
+  assert.equal(requests.at(-1).action, "complete");
+});
+
 test("Discord import returns the member's current role IDs to the website", async () => {
   const requests = [];
   const worker = require("./discord-outbox-worker").createDiscordOutboxWorker({
