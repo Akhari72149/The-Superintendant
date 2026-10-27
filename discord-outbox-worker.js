@@ -136,6 +136,18 @@ function createDiscordOutboxWorker({
         : null;
       const personnelName = String(payload.personnelName || "Unknown Member").slice(0, 100);
       const personnelMention = targetDiscordId ? `<@${targetDiscordId}>` : personnelName;
+      const tigDays = Number(payload.tigDays);
+      const attendancePercentage = Number(payload.attendancePercentage);
+      const tigLabel = Number.isFinite(tigDays) && tigDays >= 0
+        ? `${Math.floor(tigDays)} days`
+        : "Unavailable";
+      const attendanceLabel = payload.attendancePercentage !== null
+        && payload.attendancePercentage !== undefined
+        && Number.isFinite(attendancePercentage)
+        && attendancePercentage >= 0
+        ? `${Math.round(attendancePercentage * 10) / 10}%`
+        : "Unavailable";
+      const companyApprovalRequired = payload.companyApprovalRequired === true;
       const channel = await client.channels.fetch(channelId);
       if (!channel?.send) throw new Error("Promotion log channel is unavailable");
       await channel.send({
@@ -152,6 +164,13 @@ function createDiscordOutboxWorker({
             { name: "Member", value: personnelMention, inline: false },
             { name: "Current Rank", value: String(payload.oldRankName || "Unknown").slice(0, 100), inline: true },
             { name: "Ready For", value: String(payload.rankName || "Unknown").slice(0, 100), inline: true },
+            { name: "TIG", value: tigLabel, inline: true },
+            { name: "MainOp Attendance", value: attendanceLabel, inline: true },
+            ...(companyApprovalRequired ? [{
+              name: "Company Approval Required",
+              value: "Company approval is required before this promotion can be completed.",
+              inline: false,
+            }] : []),
           ],
           footer: { text: "Promotion readiness calculated automatically" },
           timestamp: new Date().toISOString(),

@@ -310,8 +310,11 @@ test("promotion readiness pings leadership in the promotion log", async () => {
             personnelName: "Example",
             oldRankName: "CT",
             rankName: "PTC",
+            tigDays: 120,
+            attendancePercentage: 72.7,
+            companyApprovalRequired: true,
             leadershipDiscordIds: ["77777777777777777", "88888888888888888"],
-            leadershipRoleIds: ["704516430531395634"],
+            leadershipRoleIds: ["813525376906821642"],
           },
           attemptCount: 1,
         }] } : { completed: true },
@@ -322,11 +325,23 @@ test("promotion readiness pings leadership in the promotion log", async () => {
 
   await worker.poll();
 
-  assert.equal(messages[0].content, "<@77777777777777777> <@88888888888888888> <@&704516430531395634>");
+  assert.equal(messages[0].content, "<@77777777777777777> <@88888888888888888> <@&813525376906821642>");
   assert.deepEqual(messages[0].allowedMentions, {
     users: ["77777777777777777", "88888888888888888"],
-    roles: ["704516430531395634"],
+    roles: ["813525376906821642"],
   });
   assert.match(messages[0].embeds[0].description, /ready to be promoted from \*\*CT\*\* to \*\*PTC\*\*/);
+  assert.deepEqual(
+    messages[0].embeds[0].fields.find((field) => field.name === "TIG"),
+    { name: "TIG", value: "120 days", inline: true },
+  );
+  assert.deepEqual(messages[0].embeds[0].fields.slice(-2), [
+    { name: "MainOp Attendance", value: "72.7%", inline: true },
+    {
+      name: "Company Approval Required",
+      value: "Company approval is required before this promotion can be completed.",
+      inline: false,
+    },
+  ]);
   assert.equal(requests[1].action, "complete");
 });
