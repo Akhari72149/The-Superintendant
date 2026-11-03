@@ -17,6 +17,7 @@ const USER_INIT_ROLES = Object.freeze([
 const NO_ROLES_TAG_ID = "492653693091577856";
 const RETIRED_TAG_ID = "586776577707081739";
 const DEFAULT_SLOT_ROLE_ID = "497834542900445195";
+const EVENT_TIMEOUT_MS = 30000;
 
 function requireDiscordId(value, field) {
   const id = String(value || "");
@@ -46,6 +47,14 @@ function safeError(error) {
   return String(error?.message || "Discord role update failed")
     .replace(/[\r\n]+/g, " ")
     .slice(0, 500);
+}
+
+function withTimeout(promise, timeoutMs, message) {
+  let timeout;
+  const expired = new Promise((_, reject) => {
+    timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+  });
+  return Promise.race([promise, expired]).finally(() => clearTimeout(timeout));
 }
 
 function isUnknownMember(error) {
@@ -297,7 +306,11 @@ function createDiscordOutboxWorker({
 
   async function processEvent(event) {
     try {
-      const result = await applyEvent(event);
+      const result = await withTimeout(
+        applyEvent(event),
+        EVENT_TIMEOUT_MS,
+        "Discord delivery timed out after 30 seconds",
+      );
       await request({
         action: "complete",
         worker: workerId,
@@ -333,7 +346,8 @@ function createDiscordOutboxWorker({
     if (running) return;
     running = true;
     try {
-      const result = await request({ action: "claim", worker: workerId, limit: 5 });
+      // Claim one event at a time so a restart cannot strand an unstarted batch as processing.
+      const result = await request({ action: "claim", worker: workerId, limit: 1 });
       for (const event of Array.isArray(result.events) ? result.events : []) {
         await processEvent(event);
       }

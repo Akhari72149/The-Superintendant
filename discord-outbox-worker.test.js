@@ -107,6 +107,7 @@ test("user initialization assigns only the supplied current rank", async () => {
 
   await worker.poll();
 
+  assert.equal(requests[0].limit, 1);
   assert.deepEqual(removed, [recruitRoleId]);
   assert.ok(added.includes(currentRankRoleId));
   assert.ok(!added.includes(recruitRoleId));
